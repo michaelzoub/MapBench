@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "issue-to-symbol-localization",
+  "title": "Localize an issue to ranked symbols",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "python3",
+      "{grader}/../../../grading/grade_localization.py",
+      "{grader}/rubric.json",
+      "{answer}",
+      "{workspace}",
+      "{events}"
+    ],
+    "timeoutMs": 30000
+  }
+}

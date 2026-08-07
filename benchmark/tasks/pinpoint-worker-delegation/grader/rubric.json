@@ -1,0 +1,82 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "primary_implementation",
+      "kind": "equals",
+      "path": "primary_file",
+      "expected": "research_harness/worker_registry.py",
+      "weight": 0.1
+    },
+    {
+      "name": "assembly",
+      "kind": "equals",
+      "path": "assembly",
+      "expected": {
+        "path": "research_harness/research_agent.py",
+        "symbol": "ResearchAgent.with_research_tools"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "entry_and_admission",
+      "kind": "equals",
+      "path": "tool_entry",
+      "expected": {
+        "path": "research_harness/worker_registry.py",
+        "symbol": "DelegateTaskTool.execute"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "capacity_admission",
+      "kind": "equals",
+      "path": "admission",
+      "expected": {
+        "path": "research_harness/worker_registry.py",
+        "symbol": "WorkerRegistry.delegate"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "capacity_accounting",
+      "kind": "list_contains",
+      "path": "capacity_symbols",
+      "expected": [
+        "WorkerRegistry._reserve_budget",
+        "WorkerRegistry._release_budget",
+        "WorkerRegistry._reconcile_budget"
+      ],
+      "weight": 0.2
+    },
+    {
+      "name": "delegation_call_flow",
+      "kind": "ordered_contains",
+      "path": "execution_flow",
+      "expected": [
+        "DelegateTaskTool.execute",
+        "WorkerRegistry.delegate",
+        "WorkerRegistry._run",
+        "AgentLoop.run"
+      ],
+      "weight": 0.15
+    },
+    {
+      "name": "worker_isolation_location",
+      "kind": "object_contains",
+      "path": "isolation",
+      "expected": {
+        "path": "research_harness/worker_registry.py",
+        "symbol": "WorkerRegistry._run"
+      },
+      "weight": 0.05
+    },
+    {
+      "name": "worker_isolation_mechanism",
+      "kind": "string_contains",
+      "path": "isolation.mechanism",
+      "expected": ["workspace", "store"],
+      "weight": 0.05
+    }
+  ]
+}

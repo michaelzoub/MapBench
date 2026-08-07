@@ -1,0 +1,56 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "console_entrypoint",
+      "kind": "entrypoint_equals",
+      "path": "entrypoint",
+      "expected": {
+        "metadata_path": "setup.cfg",
+        "command": "autore",
+        "target": "research_harness.cli:main"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "production_components",
+      "kind": "object_list_component_contains",
+      "path": "components",
+      "expected": [
+        {"path": "research_harness/cli.py", "symbol": "main"},
+        {"path": "research_harness/orchestrator.py", "symbol": "Orchestrator"},
+        {"path": "research_harness/research_agent.py", "symbol": "ResearchAgent"},
+        {"path": "research_harness/agent_loop.py", "symbol": "AgentLoop"},
+        {"path": "research_harness/agent_state.py", "symbol": "AgentState"},
+        {"path": "research_harness/tools/base.py", "symbol": "ToolRegistry"},
+        {"path": "research_harness/store.py", "symbol": "ArtifactStore"},
+        {"path": "research_harness/validation/final_answer.py", "symbol": "FinalAnswerValidator"}
+      ],
+      "weight": 0.45
+    },
+    {
+      "name": "runtime_flow",
+      "kind": "ordered_contains",
+      "path": "runtime_flow",
+      "expected": [
+        "cli.main",
+        "Orchestrator.run",
+        "ResearchAgent.with_research_tools",
+        "ResearchAgent.arun",
+        "AgentLoop.run",
+        "FinalAnswerValidator"
+      ],
+      "weight": 0.3
+    },
+    {
+      "name": "state_owner",
+      "kind": "equals",
+      "path": "state_owner",
+      "expected": {
+        "path": "research_harness/agent_state.py",
+        "symbol": "AgentState"
+      },
+      "weight": 0.1
+    }
+  ]
+}

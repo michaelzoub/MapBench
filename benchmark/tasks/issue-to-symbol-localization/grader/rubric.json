@@ -1,0 +1,13 @@
+{
+  "goldSymbols": ["PaymentValidator.validate"],
+  "relevantFiles": ["src/domain/payment-validator.ts"],
+  "relevantLine": 4,
+  "lineBudget": 500,
+  "symbolFiles": {
+    "PaymentValidator.validate": "src/domain/payment-validator.ts",
+    "PaymentController.create": "src/http/payment-controller.ts",
+    "PaymentService.execute": "src/domain/payment-service.ts",
+    "registerPaymentRoutes": "src/http/payment-routes.ts",
+    "PaymentRepository.save": "src/persistence/payment-repository.ts"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "project-outline",
+  "version": "0.1.0",
+  "description": "Generate compact repository architecture indexes, callable outlines, and machine-readable symbol relationships.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "project-outline": "./dist/src/cli.js",
+    "repo-outline": "./dist/src/cli.js"
+  },
+  "files": [
+    "dist/src",
+    "dist/benchmark"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node dist/src/copy-assets.js",
+    "outline": "tsc -p tsconfig.json --noCheck && node dist/src/copy-assets.js && node dist/src/cli.js generate",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "benchmark": "bun benchmark/cli.ts",
+    "benchmark:report": "bun benchmark/report-cli.ts",
+    "benchmark:regrade": "bun benchmark/regrade-cli.ts",
+    "benchmark:test": "bun test ./benchmark/test/harness.test.ts ./benchmark/test/report.test.ts",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0"
+  },
+  "license": "MIT"
+}

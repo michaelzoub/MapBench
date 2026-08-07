@@ -1,0 +1,32 @@
+{
+  "endpoint": {
+    "method": "POST",
+    "path": "/payments",
+    "registrationSymbol": "registerPaymentRoutes"
+  },
+  "goldNodes": [
+    "HttpRouter.dispatch",
+    "PaymentController.create",
+    "PaymentValidator.validate",
+    "PaymentService.execute",
+    "PaymentRepository.save",
+    "DatabaseAdapter.insertPayment"
+  ],
+  "goldEdges": [
+    ["HttpRouter.dispatch", "PaymentController.create"],
+    ["PaymentController.create", "PaymentValidator.validate"],
+    ["PaymentController.create", "PaymentService.execute"],
+    ["PaymentService.execute", "PaymentRepository.save"],
+    ["PaymentRepository.save", "DatabaseAdapter.insertPayment"]
+  ],
+  "goldOrdering": [
+    "HttpRouter.dispatch",
+    "PaymentController.create",
+    "PaymentValidator.validate",
+    "PaymentService.execute",
+    "PaymentRepository.save",
+    "DatabaseAdapter.insertPayment"
+  ],
+  "validationSymbol": "PaymentValidator.validate",
+  "goldSideEffects": ["payments.set"]
+}

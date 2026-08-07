@@ -1,0 +1,76 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "validation_policy",
+      "kind": "equals",
+      "path": "policy",
+      "expected": {
+        "path": "research_harness/validation/final_answer.py",
+        "symbol": "FinalAnswerValidator.validate"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "validator_construction",
+      "kind": "equals",
+      "path": "construction",
+      "expected": {
+        "path": "research_harness/agent_loop.py",
+        "symbol": "AgentLoop.__init__"
+      },
+      "weight": 0.1
+    },
+    {
+      "name": "validation_call_site",
+      "kind": "equals",
+      "path": "call_site",
+      "expected": {
+        "path": "research_harness/agent_loop.py",
+        "symbol": "AgentLoop._process_answer"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "revision_configuration",
+      "kind": "equals",
+      "path": "configuration",
+      "expected": {
+        "path": "research_harness/agent_loop.py",
+        "symbol": "AgentRunConfig.max_final_validation_revisions"
+      },
+      "weight": 0.1
+    },
+    {
+      "name": "validation_flow",
+      "kind": "ordered_contains",
+      "path": "execution_flow",
+      "expected": [
+        "AgentLoop.run",
+        "AgentLoop._process_answer",
+        "FinalAnswerValidator.validate"
+      ],
+      "weight": 0.25
+    },
+    {
+      "name": "validation_outcomes",
+      "kind": "list_contains",
+      "path": "outcome_targets",
+      "expected": [
+        "ResultBuilder.completed",
+        "ResultBuilder.partial"
+      ],
+      "weight": 0.15
+    },
+    {
+      "name": "revision_counter_and_limit",
+      "kind": "string_contains",
+      "path": "revision_behavior",
+      "expected": [
+        "final_validation_revisions",
+        "max_final_validation_revisions"
+      ],
+      "weight": 0.1
+    }
+  ]
+}

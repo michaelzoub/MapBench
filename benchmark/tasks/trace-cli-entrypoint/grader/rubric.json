@@ -1,0 +1,70 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "entrypoint_metadata",
+      "kind": "equals",
+      "path": "metadata",
+      "expected": {
+        "path": "setup.cfg",
+        "command": "autore",
+        "target": "research_harness.cli:main"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "entry_file",
+      "kind": "equals",
+      "path": "entry_file",
+      "expected": "research_harness/cli.py",
+      "weight": 0.1
+    },
+    {
+      "name": "entry_symbol",
+      "kind": "equals",
+      "path": "entry_symbol",
+      "expected": "main",
+      "weight": 0.05
+    },
+    {
+      "name": "direct_calls",
+      "kind": "list_contains",
+      "path": "direct_calls",
+      "expected": [
+        "load_dotenv",
+        "build_parser",
+        "resolve_model_selection",
+        "Orchestrator",
+        "asyncio.run",
+        "Orchestrator.run",
+        "_print_run_summary"
+      ],
+      "weight": 0.3
+    },
+    {
+      "name": "normal_runtime_flow",
+      "kind": "ordered_contains",
+      "path": "normal_runtime_flow",
+      "expected": [
+        "cli.main",
+        "Orchestrator.run",
+        "ResearchAgent.with_research_tools",
+        "ResearchAgent.arun",
+        "AgentLoop.run"
+      ],
+      "weight": 0.25
+    },
+    {
+      "name": "conditional_branches",
+      "kind": "object_list_contains",
+      "path": "conditional_branches",
+      "expected": [
+        {"target": "research_harness.run_evals.main"},
+        {"target": "format_model_catalog"},
+        {"target": "configure_interactive_run"},
+        {"target": "run_preflight_evals"}
+      ],
+      "weight": 0.15
+    }
+  ]
+}

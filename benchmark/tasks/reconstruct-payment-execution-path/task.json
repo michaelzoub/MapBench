@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "id": "reconstruct-payment-execution-path",
+  "title": "Reconstruct POST /payments execution",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "python3",
+      "{grader}/../../../grading/grade_execution_path.py",
+      "{grader}/rubric.json",
+      "{answer}",
+      "{workspace}",
+      "{events}"
+    ],
+    "timeoutMs": 30000
+  }
+}

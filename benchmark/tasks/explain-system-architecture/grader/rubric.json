@@ -1,0 +1,47 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "application_assembly",
+      "kind": "equals",
+      "path": "entrypoint",
+      "expected": {"path": "src/app.ts", "symbol": "createApplication"},
+      "weight": 0.1
+    },
+    {
+      "name": "production_components",
+      "kind": "object_list_contains",
+      "path": "components",
+      "expected": [
+        {"path": "src/http/http-router.ts", "symbol": "HttpRouter"},
+        {"path": "src/http/payment-controller.ts", "symbol": "PaymentController"},
+        {"path": "src/domain/payment-validator.ts", "symbol": "PaymentValidator"},
+        {"path": "src/domain/payment-service.ts", "symbol": "PaymentService"},
+        {"path": "src/persistence/payment-repository.ts", "symbol": "PaymentRepository"},
+        {"path": "src/adapters/database-adapter.ts", "symbol": "DatabaseAdapter"}
+      ],
+      "weight": 0.4
+    },
+    {
+      "name": "runtime_flow",
+      "kind": "ordered_contains",
+      "path": "runtime_flow",
+      "expected": [
+        "HttpRouter.dispatch",
+        "PaymentController.create",
+        "PaymentValidator.validate",
+        "PaymentService.execute",
+        "PaymentRepository.save",
+        "DatabaseAdapter.insertPayment"
+      ],
+      "weight": 0.4
+    },
+    {
+      "name": "route_registration",
+      "kind": "equals",
+      "path": "registration",
+      "expected": {"path": "src/http/payment-routes.ts", "symbol": "registerPaymentRoutes"},
+      "weight": 0.1
+    }
+  ]
+}

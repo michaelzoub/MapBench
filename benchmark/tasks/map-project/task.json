@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "map-project",
+  "title": "Map the production architecture",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "python3",
+      "{grader}/../../../grading/grade_json.py",
+      "{grader}/rubric.json",
+      "{answer}",
+      "{workspace}"
+    ],
+    "timeoutMs": 30000
+  }
+}

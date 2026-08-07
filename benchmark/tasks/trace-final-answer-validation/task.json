@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "trace-final-answer-validation",
+  "title": "Trace final-answer validation and revision impact",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "python3",
+      "{grader}/../../../grading/grade_json.py",
+      "{grader}/rubric.json",
+      "{answer}",
+      "{workspace}"
+    ],
+    "timeoutMs": 30000
+  }
+}

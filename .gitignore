@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.project-outline/
+.repo-outline/
+*.tgz
+benchmark-results/
