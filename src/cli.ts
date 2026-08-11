@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-import { cleanOutline, generateOutline, initOutline, queryOutline, watchOutline } from "./index.js";
-import type { OutlineOptions, QueryOptions } from "./types.js";
+import { cleanOutline, generateOutline, initOutline, navigateOutline, queryOutline, watchOutline } from "./index.js";
+import type {
+  CallGraphDirection,
+  CallGraphNavigationRequest,
+  OutlineOptions,
+  QueryOptions,
+} from "./types.js";
 
 const HELP = `project-outline
 
@@ -9,7 +14,11 @@ Usage:
   project-outline watch [--root <directory>] [--out <directory>] [--language <typescript|python>]
   project-outline clean [--root <directory>] [--out <directory>]
   project-outline init [--root <directory>] [--out <directory>]
-  project-outline query <symbol> [--root <directory>] [--out <directory>] [--depth <0-3>] [--limit <1-100>]
+  project-outline query find <terms> [--limit <1-100>] [--root <directory>] [--out <directory>]
+  project-outline query inspect <symbol> [--limit <1-100>] [--root <directory>] [--out <directory>]
+  project-outline query explore <symbol> [--direction <callers|callees|both>] [--depth <0-5>] [--limit <1-100>] [--root <directory>] [--out <directory>]
+  project-outline query trace <from> <to> [--direction <callers|callees|both>] [--max-depth <0-50>] [--root <directory>] [--out <directory>]
+  project-outline query <symbol> [--depth <0-3>] [--limit <1-100>] [--root <directory>] [--out <directory>]  # compatibility
   project-outline benchmark [ask|init] [options]
   project-outline --help
 `;
@@ -48,6 +57,60 @@ function parseQueryOptions(args: string[]): { symbol: string; options: QueryOpti
   return { symbol, options };
 }
 
+function parseNavigationOptions(
+  operation: CallGraphNavigationRequest["operation"],
+  args: string[],
+): { request: CallGraphNavigationRequest; options: Pick<QueryOptions, "root" | "out"> } {
+  const positionals: string[] = [];
+  const values: Record<string, string> = {};
+  const allowedByOperation: Record<CallGraphNavigationRequest["operation"], string[]> = {
+    find: ["--root", "--out", "--limit"],
+    inspect: ["--root", "--out", "--limit"],
+    explore: ["--root", "--out", "--direction", "--depth", "--limit"],
+    trace: ["--root", "--out", "--direction", "--max-depth"],
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (!argument.startsWith("--")) {
+      positionals.push(argument);
+      continue;
+    }
+    const [flag, inlineValue] = argument.split("=", 2);
+    if (!allowedByOperation[operation].includes(flag)) throw new Error(`Unknown option for query ${operation}: ${argument}`);
+    const value = inlineValue ?? args[++index];
+    if (!value) throw new Error(`Missing value for ${flag}`);
+    values[flag] = value;
+  }
+  const expected = operation === "trace" ? 2 : 1;
+  if (positionals.length !== expected) {
+    throw new Error(`query ${operation} requires ${expected === 1 ? "one search or symbol argument" : "from and to symbol arguments"}.`);
+  }
+  const options = { root: values["--root"], out: values["--out"] };
+  const direction = values["--direction"] as CallGraphDirection | undefined;
+  if (operation === "find") {
+    return { request: { operation, query: positionals[0], limit: values["--limit"] === undefined ? undefined : Number(values["--limit"]) }, options };
+  }
+  if (operation === "inspect") {
+    return { request: { operation, query: positionals[0], limit: values["--limit"] === undefined ? undefined : Number(values["--limit"]) }, options };
+  }
+  if (operation === "explore") {
+    return { request: {
+      operation,
+      query: positionals[0],
+      direction,
+      depth: values["--depth"] === undefined ? undefined : Number(values["--depth"]),
+      limit: values["--limit"] === undefined ? undefined : Number(values["--limit"]),
+    }, options };
+  }
+  return { request: {
+    operation,
+    from: positionals[0],
+    to: positionals[1],
+    direction,
+    maxDepth: values["--max-depth"] === undefined ? undefined : Number(values["--max-depth"]),
+  }, options };
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "--help" || command === "-h") {
@@ -61,6 +124,16 @@ async function main(): Promise<void> {
   }
 
   if (command === "query") {
+    const operation = args[0];
+    if (operation === "find" || operation === "inspect" || operation === "explore" || operation === "trace") {
+      const { request, options } = parseNavigationOptions(operation, args.slice(1));
+      const result = await navigateOutline(request, options);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      if (("matches" in result && !result.matches.length) || ("resolution" in result && result.resolution !== "exact")) {
+        process.exitCode = 2;
+      }
+      return;
+    }
     const { symbol, options } = parseQueryOptions(args);
     const result = await queryOutline(symbol, options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

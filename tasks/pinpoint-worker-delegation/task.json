@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "id": "explain-system-architecture",
-  "title": "Explain the system architecture",
+  "id": "pinpoint-worker-delegation",
+  "title": "Pinpoint research-agent delegated-worker execution",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_json.py",
+      "{sharedGraders}/grade_json.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}"

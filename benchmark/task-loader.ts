@@ -1,6 +1,11 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import type { LoadedTask, TaskManifest } from "./types.js";
+
+export function resolveBundledTasksRoot(moduleDirectory: string): string {
+  const packaged = path.resolve(moduleDirectory, "tasks");
+  return existsSync(packaged) ? packaged : path.resolve(moduleDirectory, "../tasks");
+}
 
 function validateCommand(value: unknown, field: string): void {
   if (!value || typeof value !== "object" || !Array.isArray((value as { command?: unknown }).command) ||
@@ -45,6 +50,7 @@ export function expandCommand(command: string[], workspace: string, grader: stri
   return command.map((part) => part
     .replaceAll("{workspace}", workspace)
     .replaceAll("{grader}", grader)
+    .replaceAll("{sharedGraders}", path.resolve(import.meta.dirname, "graders"))
     .replaceAll("{answer}", answer)
     .replaceAll("{events}", events));
 }

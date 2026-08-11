@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "id": "trace-final-answer-validation",
-  "title": "Trace final-answer validation and revision impact",
+  "id": "trace-cli-entrypoint",
+  "title": "Trace the research-agent autore CLI entrypoint",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_json.py",
+      "{sharedGraders}/grade_json.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}"

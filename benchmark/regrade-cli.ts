@@ -6,7 +6,7 @@ import { runHiddenGrader } from "./grader.js";
 import { runProcess } from "./process.js";
 import { generateReport } from "./report.js";
 import { buildSummary } from "./summary.js";
-import { loadTask } from "./tasks.js";
+import { loadTask, resolveBundledTasksRoot } from "./task-loader.js";
 import type { BenchmarkSummary, RunResult } from "./types.js";
 import { writeJson } from "./util.js";
 import { removePrivateTaskFromWorkspace } from "./workspace.js";
@@ -39,7 +39,10 @@ async function main(): Promise<void> {
   try {
     await checked(["git", "clone", "--quiet", "--no-hardlinks", config.repo, workspace], temporary);
     await checked(["git", "checkout", "--quiet", "--detach", config.targetCommit], workspace);
-    const tasksRoot = typeof config.tasksRoot === "string" ? path.resolve(config.tasksRoot) : path.resolve(import.meta.dirname, "tasks");
+    const configuredTasksRoot = typeof config.tasksRoot === "string" ? path.resolve(config.tasksRoot) : "";
+    const tasksRoot = configuredTasksRoot && await fs.access(configuredTasksRoot).then(() => true, () => false)
+      ? configuredTasksRoot
+      : resolveBundledTasksRoot(import.meta.dirname);
     await removePrivateTaskFromWorkspace(workspace, config.repo, tasksRoot);
     const taskCache = new Map<string, Awaited<ReturnType<typeof loadTask>>>();
     const runs: RunResult[] = [];

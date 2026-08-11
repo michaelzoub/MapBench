@@ -1,12 +1,12 @@
 {
   "version": 1,
   "id": "issue-to-symbol-localization",
-  "title": "Localize an issue to ranked symbols",
+  "title": "Localize the payments-service currency validation issue",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_localization.py",
+      "{sharedGraders}/grade_localization.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}",

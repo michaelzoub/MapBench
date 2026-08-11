@@ -20,6 +20,25 @@ function createOutlineInstructionsBody(outputDirectory: string): string {
 Use the single smallest artifact that fits the question; consult another only if the first is insufficient:
 
 - \`${directory}/architecture.md\` — modules and end-to-end flows.
+- \`project-outline query find "<terms>"\` — locate symbols lexically when the exact ID is unknown.
+- \`project-outline query inspect "<symbol>"\` — inspect one symbol's callers, callees, location, and boundary metadata.
+- \`project-outline query explore "<symbol>" --depth 2\` — expand a bounded subsystem only when repeated local inspection is insufficient.
+- \`project-outline query trace "<from>" "<to>"\` — find a shortest static call path. Add \`--direction both\` when the relationship direction is unknown.
+- \`${directory}/<source-path>\` — declarations and signatures without bodies.
+
+If the CLI is unavailable, replace \`project-outline query\` with \`node ${directory}/query.mjs\`. Prefer \`find\` → \`inspect\`, then follow returned symbol IDs with more \`inspect\` calls. Never dump \`callgraph.json\`, parse it directly, or search it broadly; the query interface intentionally exposes only the requested slice.
+
+Open only the narrow real-source ranges needed after the graph has identified the implementation path, especially for dynamic dispatch or unresolved calls. Exclude generated files from source searches with \`-g '!${directory}/**'\`. Regenerate after structural changes with \`project-outline generate\`.
+`;
+}
+
+function createPreviousOutlineInstructionsBody(outputDirectory: string): string {
+  const directory = markdownPath(outputDirectory).replace(/\/$/, "");
+  return `# Project Outline
+
+Use the single smallest artifact that fits the question; consult another only if the first is insufficient:
+
+- \`${directory}/architecture.md\` — modules and end-to-end flows.
 - \`project-outline query "<symbol>"\` (or \`node ${directory}/query.mjs "<symbol>"\`) — callers, callees, and symbol locations. Never dump \`callgraph.json\`.
 - \`${directory}/<source-path>\` — declarations and signatures without bodies.
 
@@ -67,6 +86,8 @@ Before exploring or modifying this repository:
 export function isManagedOutlineInstructions(contents: string, outputDirectory = ".project-outline"): boolean {
   return contents === createOutlineInstructions(outputDirectory) ||
     contents === createOutlineInstructionsBody(outputDirectory) ||
+    contents === `${OUTLINE_INSTRUCTIONS_HEADER}\n${createPreviousOutlineInstructionsBody(outputDirectory)}` ||
+    contents === createPreviousOutlineInstructionsBody(outputDirectory) ||
     contents === createLegacyOutlineInstructions(outputDirectory) ||
     contents === createOlderOutlineInstructions(outputDirectory);
 }
@@ -79,9 +100,10 @@ export function createManagedAgentsSection(outputDirectory = ".project-outline")
 Use one smallest-fit aid first; use another only if needed:
 
 - \`${directory}/architecture.md\` for modules and flows
-- \`project-outline query "<symbol>"\` (or \`node ${directory}/query.mjs "<symbol>"\`) for callers/callees; never dump \`callgraph.json\`
+- \`project-outline query find "<terms>"\` to locate symbols, then \`project-outline query inspect "<symbol>"\` to follow callers/callees
+- \`project-outline query explore "<symbol>" --depth 2\` for a bounded subsystem, or \`project-outline query trace "<from>" "<to>"\` for a static path
 - \`${directory}/<source-path>\` for declarations and signatures
 
-Open narrow real-source ranges only for missing implementation or dynamic behavior; exclude \`${directory}/**\` from source searches. Regenerate after structural changes with \`project-outline generate\`.
+Use \`node ${directory}/query.mjs ...\` if the CLI is unavailable. Never dump or broadly read \`callgraph.json\`. Follow returned symbol IDs progressively, then open narrow real-source ranges only for missing implementation or dynamic behavior; exclude \`${directory}/**\` from source searches. Regenerate after structural changes with \`project-outline generate\`.
 ${MANAGED_SECTION_END}`;
 }

@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "id": "trace-cli-entrypoint",
-  "title": "Trace calls from the autore entrypoint",
+  "id": "explain-system-architecture",
+  "title": "Explain payments-service production architecture",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_json.py",
+      "{sharedGraders}/grade_json.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}"

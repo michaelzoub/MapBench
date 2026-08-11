@@ -1,0 +1,53 @@
+{
+  "requiredFiles": [
+    "packages/marketplace/src/marketplace.ts",
+    "packages/marketplace/src/types.ts",
+    "packages/facilitator/src/scheme.ts",
+    "packages/facilitator/src/router-settlement-client.ts",
+    "packages/contracts/src/MerchantRouter.sol",
+    "packages/contracts/src/MerchantRouterFactory.sol",
+    "packages/contracts/script/DeployMerchantRouter.s.sol"
+  ],
+  "requiredSymbols": [
+    {
+      "name": "createMarketplace",
+      "path": "packages/marketplace/src/marketplace.ts"
+    },
+    {
+      "name": "CreateMarketplaceConfig",
+      "path": "packages/marketplace/src/types.ts"
+    },
+    {
+      "name": "RubiconExactEvmScheme",
+      "path": "packages/facilitator/src/scheme.ts"
+    },
+    {
+      "name": "ViemRouterSettlementClient",
+      "path": "packages/facilitator/src/router-settlement-client.ts"
+    },
+    {
+      "name": "MerchantRouter",
+      "path": "packages/contracts/src/MerchantRouter.sol"
+    },
+    {
+      "name": "settleAndDistribute",
+      "path": "packages/contracts/src/MerchantRouter.sol"
+    },
+    {
+      "name": "MerchantRouterFactory",
+      "path": "packages/contracts/src/MerchantRouterFactory.sol"
+    },
+    {
+      "name": "deployRouter",
+      "path": "packages/contracts/src/MerchantRouterFactory.sol"
+    },
+    {
+      "name": "DeployMerchantRouter",
+      "path": "packages/contracts/script/DeployMerchantRouter.s.sol"
+    },
+    {
+      "name": "run",
+      "path": "packages/contracts/script/DeployMerchantRouter.s.sol"
+    }
+  ]
+}

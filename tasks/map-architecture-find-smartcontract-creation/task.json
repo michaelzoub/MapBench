@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "map-architecture-find-smartcontract-creation",
+  "title": "Explain x402 architecture and contract deployment",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "node",
+      "{grader}/grade.mjs",
+      "{answer}",
+      "{workspace}"
+    ],
+    "timeoutMs": 30000
+  }
+}

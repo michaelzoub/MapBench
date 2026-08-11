@@ -3,7 +3,14 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { cleanOutline, generateOutline, initOutline, queryOutline, watchOutline } from "../src/index.js";
+import {
+  cleanOutline,
+  generateOutline,
+  initOutline,
+  navigateOutline,
+  queryOutline,
+  watchOutline,
+} from "../src/index.js";
 
 const fixtureRoot = path.resolve(process.cwd(), "test/fixtures/basic/repository");
 const expectedRoot = path.resolve(process.cwd(), "test/fixtures/basic/expected");
@@ -26,9 +33,9 @@ test("generates deterministic high-level mirrors and removes stale files", async
   const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "repo-outline-test-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.cp(fixtureRoot, repository, { recursive: true });
-  await fs.mkdir(path.join(repository, ".project-outline-evals", "private-task", "grader"), { recursive: true });
+  await fs.mkdir(path.join(repository, "tasks", "private-task", "grader"), { recursive: true });
   await fs.writeFile(
-    path.join(repository, ".project-outline-evals", "private-task", "grader", "grade.py"),
+    path.join(repository, "tasks", "private-task", "grader", "grade.py"),
     "SECRET_EXPECTED_ANSWER = 'must never enter agent context'\n",
   );
 
@@ -45,11 +52,15 @@ test("generates deterministic high-level mirrors and removes stale files", async
       "src/types.ts",
       "src/workers/worker-manager.ts",
     ]);
-    assert.equal((await relativeFiles(first.out)).some((file) => file.includes("project-outline-evals")), false);
+    assert.equal((await relativeFiles(first.out)).some((file) => file.startsWith("tasks/")), false);
 
     const instructions = await fs.readFile(path.join(first.out, "AGENTS.md"), "utf8");
     assert.match(instructions, /^<!-- @project-outline generated -->/);
     assert.match(instructions, /project-outline query/);
+    assert.match(instructions, /query find/);
+    assert.match(instructions, /query inspect/);
+    assert.match(instructions, /query explore/);
+    assert.match(instructions, /query trace/);
     assert.match(instructions, /single smallest artifact/);
     assert.match(instructions, /Never dump `callgraph\.json`/);
     assert.doesNotMatch(instructions, /architecture\.md` first/);
@@ -84,6 +95,40 @@ test("generates deterministic high-level mirrors and removes stale files", async
     assert.equal(query.matches.some((item) => item.id === findId && item.distance === 1), true);
     const missing = await queryOutline("DefinitelyMissingSymbol", { root: repository });
     assert.deepEqual(missing.matches, []);
+
+    const found = await navigateOutline({ operation: "find", query: "worker process" }, { root: repository });
+    assert.equal(found.operation, "find");
+    assert.equal(found.matches[0].id, processId);
+    assert.deepEqual(Object.keys(found.matches[0]), ["id", "location", "kind", "signature"]);
+
+    const inspected = await navigateOutline({ operation: "inspect", query: "WorkerManager.process" }, { root: repository });
+    assert.equal(inspected.operation, "inspect");
+    assert.equal(inspected.resolution, "exact");
+    assert.equal(inspected.symbol?.id, processId);
+    assert.deepEqual(inspected.symbol?.callees.map((item) => item.id), [findId]);
+    assert.deepEqual(inspected.symbol?.externalCalls, ["zod#z.number().parse"]);
+    assert.equal(JSON.stringify(inspected).includes("bootstrap"), false);
+
+    const explored = await navigateOutline({
+      operation: "explore",
+      query: "WorkerManager.process",
+      direction: "callees",
+      depth: 2,
+    }, { root: repository });
+    assert.equal(explored.operation, "explore");
+    assert.deepEqual(explored.nodes?.map((item) => item.id), [processId, findId]);
+    assert.deepEqual(explored.edges, [[processId, findId]]);
+
+    const traced = await navigateOutline({
+      operation: "trace",
+      from: "WorkerManager.process",
+      to: "CandidateStore.find",
+    }, { root: repository });
+    assert.equal(traced.operation, "trace");
+    assert.equal(traced.found, true);
+    assert.deepEqual(traced.path?.map((item) => item.id), [processId, findId]);
+    assert.deepEqual(traced.steps, [{ from: processId, to: findId, relation: "calls" }]);
+
     await generateOutline({ root: repository });
     assert.equal(await fs.readFile(path.join(first.out, "callgraph.json"), "utf8"), serializedGraph);
     assert.equal(await fs.readFile(path.join(first.out, "architecture.mmd"), "utf8"), mermaid);
@@ -257,6 +302,11 @@ export function start(): void { runAlpha(); runBeta(); }
     const ambiguous = await queryOutline("run", { root: repository });
     assert.equal(ambiguous.exact, false);
     assert.deepEqual(ambiguous.matches.map((match) => match.id), [alpha, beta]);
+    const inspected = await navigateOutline({ operation: "inspect", query: "run" }, { root: repository });
+    assert.equal(inspected.operation, "inspect");
+    assert.equal(inspected.resolution, "ambiguous");
+    assert.equal(inspected.symbol, undefined);
+    assert.deepEqual(inspected.candidates?.map((candidate) => candidate.id), [alpha, beta]);
     const qualified = await queryOutline(alpha, { root: repository });
     assert.equal(qualified.exact, true);
     assert.equal(qualified.matches.some((match) => match.id === start && match.distance === 1), true);

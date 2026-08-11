@@ -1,0 +1,19 @@
+{
+  "verdict": "failed_contract_payout",
+  "explanation": "HTTP 200 means the facilitator synchronously called the merchant router and should already have paid the seller.",
+  "settlement_boundary": {
+    "payment_status": "SETTLED",
+    "payout_status": "CONFIRMED",
+    "funds_holder": "seller"
+  },
+  "payment_states": ["SETTLED"],
+  "payout_states": ["CONFIRMED"],
+  "onchain_calls": [
+    {"contract": "MerchantRouter", "function": "executePayout", "recipient": "seller", "effect": "Facilitator pays seller synchronously."}
+  ],
+  "production_path": [
+    {"path": "packages/contracts/src/MerchantRouter.sol", "symbol": "MerchantRouter.executePayout", "responsibility": "Everything happens here."}
+  ],
+  "replay_guards": [],
+  "operator_checks": ["retry the HTTP request"]
+}

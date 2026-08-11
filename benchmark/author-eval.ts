@@ -4,8 +4,8 @@ import path from "node:path";
 import { runHiddenGrader } from "./grader.js";
 import { runProcess } from "./process.js";
 import { type ExpectedLocalizationAnswer, scaffoldEvalTask } from "./scaffold.js";
-import { loadTask } from "./tasks.js";
-import { createWorkspace, resolveCommit } from "./workspace.js";
+import { loadTask } from "./task-loader.js";
+import { createWorkspace, removePrivateTaskFromWorkspace, resolveCommit } from "./workspace.js";
 
 export interface AuthoredLocalizationAnswer extends ExpectedLocalizationAnswer {
   rationale?: string[];
@@ -13,6 +13,7 @@ export interface AuthoredLocalizationAnswer extends ExpectedLocalizationAnswer {
 
 export interface CreateAuthoredEvalOptions {
   repo: string;
+  tasksRoot?: string;
   id: string;
   question: string;
   title?: string;
@@ -142,7 +143,7 @@ export async function createAuthoredEval(options: CreateAuthoredEvalOptions): Pr
   const question = options.question.trim();
   if (!question) throw new Error("The eval question cannot be empty.");
   if (!/^[a-z0-9][a-z0-9-]*$/.test(options.id)) throw new Error("Eval task id must contain only lowercase letters, digits, and hyphens.");
-  const tasksRoot = path.join(repo, ".project-outline-evals");
+  const tasksRoot = path.resolve(options.tasksRoot ?? "tasks");
   const destination = path.join(tasksRoot, options.id);
   if (await fs.access(destination).then(() => true, () => false)) throw new Error(`Eval task already exists: ${destination}`);
   const commit = await resolveCommit(repo);
@@ -150,7 +151,7 @@ export async function createAuthoredEval(options: CreateAuthoredEvalOptions): Pr
   let directory = "";
   try {
     const workspace = await createWorkspace(repo, commit, "authoring", temporary);
-    await fs.rm(path.join(workspace, ".project-outline-evals"), { recursive: true, force: true });
+    await removePrivateTaskFromWorkspace(workspace, repo, tasksRoot);
     const authored = await (options.author ?? authorLocalizationGroundTruth)(workspace, question, options.model);
     const expected = await validateAuthoredGroundTruth(workspace, authored);
     const title = options.title?.trim() || options.id.split("-").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");

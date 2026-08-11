@@ -7,7 +7,7 @@ import { createAuthoredEval } from "./author-eval.js";
 import { materializeExampleRepository } from "./examples.js";
 import { BENCHMARK_REPETITIONS, DEFAULT_BENCHMARK_MODEL, DEFAULT_BENCHMARK_REASONING_EFFORT, runBenchmark } from "./runner.js";
 import { scaffoldEvalTask } from "./scaffold.js";
-import { listTasks } from "./tasks.js";
+import { listTasks, resolveBundledTasksRoot } from "./task-loader.js";
 import { CONDITIONS, DEFAULT_CONDITIONS, normalizeCondition, type BenchmarkOptions } from "./types.js";
 
 const HELP = `project-outline benchmark
@@ -23,7 +23,7 @@ Options:
   --repo <path>             Target Git repository (required; never modified)
   --example <name>          Bundled repository snapshot (use instead of --repo)
   --task <id>               Run an explicit task subset (repeatable)
-  --tasks <path>            Custom task root (default: <repo>/.project-outline-evals when present)
+  --tasks <path>            Task root (default: bundled top-level tasks/)
   --all                     Run every task (also the default when --task is omitted)
   --runs <n>                Must be 3; every task-condition cell has exactly 3 fresh runs
   --conditions <csv|preset> Conditions (default: targeted; presets: targeted, factorial)
@@ -59,6 +59,7 @@ Options:
   --pricing-model <id>      OpenRouter author/slug override
   --timeout <seconds>       Timeout per benchmark run
   --output <path>           Results parent
+  --tasks <path>            Task root (default: <cwd>/tasks)
   --run                     Start the benchmark without the final confirmation
   --no-run                  Create and validate the eval without running it
   --dry-run                 Create the eval, then print the four-condition plan
@@ -69,7 +70,7 @@ const INIT_HELP = `project-outline benchmark init
 Usage:
   project-outline benchmark init --repo <path> --task <id> [--title <title>] [--tasks <path>]
 
-Creates a fail-closed custom eval under <repo>/.project-outline-evals by default.
+Creates a fail-closed custom eval under <cwd>/tasks by default.
 Edit prompt.md and grader/expected.json before running the benchmark.
 `;
 
@@ -114,6 +115,7 @@ async function askWorkflow(args: string[]): Promise<string[] | null> {
   let pricingModel = "";
   let timeout = "";
   let output = "";
+  let tasksRoot = "";
   let runChoice: boolean | null = null;
   let dryRun = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -124,7 +126,7 @@ async function askWorkflow(args: string[]): Promise<string[] | null> {
       else { dryRun = true; runChoice = true; }
       continue;
     }
-    if (!["--repo", "--task", "--question", "--title", "--runs", "--model", "--pricing", "--pricing-model", "--timeout", "--output"].includes(flag)) {
+    if (!["--repo", "--task", "--question", "--title", "--runs", "--model", "--pricing", "--pricing-model", "--timeout", "--output", "--tasks"].includes(flag)) {
       throw new Error(`Unknown benchmark ask option: ${args[index]}`);
     }
     const [input, consumed] = value(args, index, flag);
@@ -138,7 +140,8 @@ async function askWorkflow(args: string[]): Promise<string[] | null> {
     else if (flag === "--pricing") pricing = input;
     else if (flag === "--pricing-model") pricingModel = input;
     else if (flag === "--timeout") timeout = input;
-    else output = input;
+    else if (flag === "--output") output = input;
+    else tasksRoot = path.resolve(input);
   }
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if ((!repo || !name || !question || runChoice === null) && !interactive) {
@@ -151,17 +154,18 @@ async function askWorkflow(args: string[]): Promise<string[] | null> {
     if (!question) question = (await readline!.question("Question to evaluate: ")).trim();
     const id = taskId(name);
     process.stdout.write(`\nAuthoring a private grader for ${id} from the repository's current HEAD commit...\n`);
-    const created = await createAuthoredEval({ repo, id, question, title: title || name, model });
+    const resolvedTasksRoot = tasksRoot || path.resolve("tasks");
+    const created = await createAuthoredEval({ repo, tasksRoot: resolvedTasksRoot, id, question, title: title || name, model });
     process.stdout.write(`Created and validated: ${created.directory}\nGround truth: ${created.expected.requiredFiles.length} file(s), ${created.expected.requiredSymbols.length} symbol(s).\n`);
     if (runChoice === null) {
       const answer = (await readline!.question(`Run 4 conditions × ${runs} repetitions now? [y/N]: `)).trim().toLowerCase();
       runChoice = answer === "y" || answer === "yes";
     }
     if (!runChoice) {
-      process.stdout.write(`Eval is ready. Run it later with:\n  project-outline benchmark --repo ${JSON.stringify(path.resolve(repo))} --task ${id} --conditions targeted --runs ${runs}\n`);
+      process.stdout.write(`Eval is ready. Run it later with:\n  project-outline benchmark --repo ${JSON.stringify(path.resolve(repo))} --tasks ${JSON.stringify(resolvedTasksRoot)} --task ${id} --conditions targeted --runs ${runs}\n`);
       return null;
     }
-    const benchmarkArgs = ["--repo", path.resolve(repo), "--task", id, "--conditions", "targeted", "--runs", runs, "--model", model, "--pricing", pricing];
+    const benchmarkArgs = ["--repo", path.resolve(repo), "--tasks", resolvedTasksRoot, "--task", id, "--conditions", "targeted", "--runs", runs, "--model", model, "--pricing", pricing];
     if (pricingModel) benchmarkArgs.push("--pricing-model", pricingModel);
     if (timeout) benchmarkArgs.push("--timeout", timeout);
     if (output) benchmarkArgs.push("--output", output);
@@ -194,8 +198,9 @@ async function initTask(args: string[]): Promise<void> {
   try { repositoryStat = await fs.stat(repo); }
   catch { throw new Error(`Repository does not exist: ${repo}`); }
   if (!repositoryStat.isDirectory()) throw new Error(`Repository is not a directory: ${repo}`);
-  const directory = await scaffoldEvalTask({ tasksRoot: tasksRoot || path.join(repo, ".project-outline-evals"), id, title });
-  process.stdout.write(`Created custom eval: ${directory}\nEdit prompt.md and grader/expected.json, then run project-outline benchmark --repo ${JSON.stringify(repo)}.\n`);
+  const resolvedTasksRoot = tasksRoot || path.resolve("tasks");
+  const directory = await scaffoldEvalTask({ tasksRoot: resolvedTasksRoot, id, title });
+  process.stdout.write(`Created custom eval: ${directory}\nEdit prompt.md and grader/expected.json, then run project-outline benchmark --repo ${JSON.stringify(repo)} --tasks ${JSON.stringify(resolvedTasksRoot)}.\n`);
 }
 
 export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promise<void> {
@@ -207,7 +212,7 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   }
   if (args[0] === "init") { await initTask(args.slice(1)); return; }
   if (args.includes("--help") || args.includes("-h")) { process.stdout.write(HELP); return; }
-  const bundledTasksRoot = path.resolve(import.meta.dirname, "tasks");
+  const bundledTasksRoot = resolveBundledTasksRoot(import.meta.dirname);
   const options: BenchmarkOptions = {
     repo: "", taskIds: [], runs: BENCHMARK_REPETITIONS, conditions: [...DEFAULT_CONDITIONS], model: DEFAULT_BENCHMARK_MODEL, timeoutMs: 1_800_000,
     dryRun: false, keepWorkspaces: false, outputRoot: path.resolve("benchmark-results"), tasksRoot: bundledTasksRoot,
@@ -247,14 +252,6 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   }
   if (options.repo && example) throw new Error("Use either --repo or --example, not both.");
   if (!options.repo && !example) throw new Error("--repo or --example is required.");
-  if (!example && options.tasksRoot === bundledTasksRoot) {
-    const localTasksRoot = path.join(options.repo, ".project-outline-evals");
-    try {
-      if ((await fs.stat(localTasksRoot)).isDirectory()) options.tasksRoot = localTasksRoot;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
   if (options.runs !== BENCHMARK_REPETITIONS) throw new Error(`--runs must be exactly ${BENCHMARK_REPETITIONS}.`);
   const missingConditions = DEFAULT_CONDITIONS.filter((condition) => !options.conditions.includes(condition));
   if (missingConditions.length) process.stderr.write(`benchmark: warning: incomplete targeted comparison; missing conditions: ${missingConditions.join(", ")}\n`);

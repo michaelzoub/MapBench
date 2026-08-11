@@ -8,7 +8,7 @@ import { runCheck, runHiddenGrader, unavailableCheck } from "./grader.js";
 import { generateReport } from "./report.js";
 import { runProcess } from "./process.js";
 import { buildSummary } from "./summary.js";
-import { loadTask } from "./tasks.js";
+import { expandCommand, loadTask } from "./task-loader.js";
 import { disabledPricing, fetchOpenRouterPricing } from "./pricing.js";
 import type { BenchmarkOptions, GraderResult, LoadedTask, PricingResolution, RunResult } from "./types.js";
 import { CONDITION_FACTORS, CONDITION_LABELS } from "./types.js";
@@ -242,11 +242,13 @@ export async function runBenchmark(options: BenchmarkOptions): Promise<{ results
     return {
       pairId, taskId: task.id, taskPrompt: task.prompt, condition, run, workspace,
       codexCommand: codexCommand(workspace, options.model, path.join(artifact, "final-message.md")),
-      graderCommand: task.grader.command.map((part) => part
-        .replaceAll("{workspace}", workspace)
-        .replaceAll("{grader}", task.graderDirectory)
-        .replaceAll("{answer}", path.join(artifact, "final-message.md"))
-        .replaceAll("{events}", path.join(artifact, "events.jsonl"))),
+      graderCommand: expandCommand(
+        task.grader.command,
+        workspace,
+        task.graderDirectory,
+        path.join(artifact, "final-message.md"),
+        path.join(artifact, "events.jsonl"),
+      ),
     };
   });
   if (options.dryRun) return { resultsRoot, plan, runs: [], pricing };

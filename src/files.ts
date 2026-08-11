@@ -16,7 +16,6 @@ export const EXCLUDED_DIRECTORIES = new Set([
   ".nuxt",
   ".output",
   ".project-outline",
-  ".project-outline-evals",
   ".turbo",
   ".vscode",
   "build",
@@ -60,13 +59,18 @@ export function isInside(parent: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
+function isExcludedDirectory(root: string, directory: string): boolean {
+  const name = path.basename(directory).toLowerCase();
+  return EXCLUDED_DIRECTORIES.has(name) || (name === "tasks" && path.dirname(path.relative(root, directory)) === ".");
+}
+
 export function isMeaningfulTypeScriptFile(fileName: string, root: string, out: string): boolean {
   const absolute = path.resolve(fileName);
   if (!isInside(root, absolute) || isInside(out, absolute)) return false;
 
   const relative = path.relative(root, absolute);
   const segments = relative.split(path.sep).map((segment) => segment.toLowerCase());
-  if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment))) return false;
+  if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment)) || segments[0] === "tasks") return false;
 
   const baseName = path.basename(absolute);
   if (!/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(baseName)) return false;
@@ -78,7 +82,7 @@ export function isMeaningfulPythonFile(fileName: string, root: string, out: stri
   if (!isInside(root, absolute) || isInside(out, absolute)) return false;
   const relative = path.relative(root, absolute);
   const segments = relative.split(path.sep).map((segment) => segment.toLowerCase());
-  if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment))) return false;
+  if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment)) || segments[0] === "tasks") return false;
   const baseName = path.basename(absolute);
   if (path.extname(baseName).toLowerCase() !== ".py") return false;
   return !PYTHON_EXCLUDED_FILE_PATTERNS.some((pattern) => pattern.test(baseName));
@@ -95,7 +99,7 @@ export async function discoverTypeScriptFiles(root: string, out: string): Promis
     for (const entry of entries) {
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase())) await visit(absolute);
+        if (!isExcludedDirectory(root, absolute)) await visit(absolute);
       } else if (entry.isFile() && isMeaningfulTypeScriptFile(absolute, root, out)) {
         files.push(absolute);
       }
@@ -123,7 +127,7 @@ async function discoverFiles(
     for (const entry of entries) {
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase())) await visit(absolute);
+        if (!isExcludedDirectory(root, absolute)) await visit(absolute);
       } else if (entry.isFile() && predicate(absolute, root, out)) {
         files.push(absolute);
       }

@@ -1,0 +1,36 @@
+{
+  "verdict": "expected_async_boundary",
+  "explanation": "The successful x402 transaction deposits the gross amount into MerchantRouter. A durable outbox and payout worker later submit a separately signed executePayout transaction, so HTTP 200 can precede seller distribution.",
+  "settlement_boundary": {
+    "payment_status": "SETTLED",
+    "payout_status": "PENDING",
+    "funds_holder": "MerchantRouter"
+  },
+  "payment_states": ["CREATED", "VERIFIED", "SETTLED"],
+  "payout_states": ["PENDING", "CLAIMED", "SUBMITTED", "CONFIRMED"],
+  "onchain_calls": [
+    {
+      "contract": "payment-token",
+      "function": "transferWithAuthorization",
+      "recipient": "MerchantRouter",
+      "effect": "The facilitator deposits the buyer's gross payment into the router."
+    },
+    {
+      "contract": "MerchantRouter",
+      "function": "executePayout",
+      "recipient": "seller and treasury",
+      "effect": "The permissionless crank submits merchant-signed terms and the router distributes the balance."
+    }
+  ],
+  "production_path": [
+    {"path": "examples/express/src/server.ts", "symbol": "marketplace.protect", "responsibility": "Installs the paid route and starts the separately configured worker."},
+    {"path": "packages/marketplace/src/marketplace.ts", "symbol": "onAfterSettle", "responsibility": "Validates facilitator success before committing settlement."},
+    {"path": "packages/marketplace/src/settlement.ts", "symbol": "ViemSettlementValidator.validate", "responsibility": "Checks the authoritative receipt and EIP-3009 calldata."},
+    {"path": "packages/marketplace/src/store.ts", "symbol": "SqliteMarketplaceStore.confirmPaymentAndEnqueue", "responsibility": "Atomically marks payment SETTLED and inserts a PENDING payout."},
+    {"path": "packages/marketplace/src/worker.ts", "symbol": "PayoutWorker.runOnce", "responsibility": "Claims and processes durable payout obligations."},
+    {"path": "packages/marketplace/src/worker.ts", "symbol": "ViemPayoutExecutor.prepare", "responsibility": "Encodes and signs the executePayout transaction."},
+    {"path": "packages/contracts/src/MerchantRouter.sol", "symbol": "MerchantRouter.executePayout", "responsibility": "Validates signed terms, transfers seller and fee amounts, and emits PayoutExecuted."}
+  ],
+  "replay_guards": ["usedPaymentIds", "usedNonces"],
+  "operator_checks": ["worker process", "payout status and lastError", "stored transaction hash", "transaction receipt", "PayoutExecuted event"]
+}

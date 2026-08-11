@@ -15,6 +15,100 @@ export interface QueryOptions {
   limit?: number;
 }
 
+export type CallGraphDirection = "callers" | "callees" | "both";
+
+export interface CallGraphSymbolReference {
+  id: string;
+  /** 1-based repository-relative jump target in `file:line:column` form. */
+  location: string;
+  kind: CallGraphSymbolKind;
+  signature: string;
+}
+
+export interface CallGraphSymbolDetail extends CallGraphSymbolReference {
+  /** Callees in first lexical source-occurrence order. */
+  callees: CallGraphSymbolReference[];
+  callers: CallGraphSymbolReference[];
+  instantiates?: string[];
+  unresolvedProjectCalls?: string[];
+  externalCalls?: string[];
+}
+
+export interface CallGraphFindResult {
+  operation: "find";
+  query: string;
+  matches: CallGraphSymbolReference[];
+  truncated: boolean;
+}
+
+export interface CallGraphInspectResult {
+  operation: "inspect";
+  query: string;
+  resolution: "exact" | "ambiguous" | "missing";
+  symbol?: CallGraphSymbolDetail;
+  candidates?: CallGraphSymbolReference[];
+  omitted?: {
+    callers: number;
+    callees: number;
+  };
+  truncated: boolean;
+}
+
+export interface CallGraphExploreNode extends CallGraphSymbolReference {
+  distance: number;
+  instantiates?: string[];
+  unresolvedProjectCalls?: string[];
+  externalCalls?: string[];
+}
+
+export interface CallGraphExploreResult {
+  operation: "explore";
+  query: string;
+  resolution: "exact" | "ambiguous" | "missing";
+  direction: CallGraphDirection;
+  depth: number;
+  root?: string;
+  nodes?: CallGraphExploreNode[];
+  /** Directed repository call edges represented as `[caller, callee]`. */
+  edges?: [string, string][];
+  candidates?: CallGraphSymbolReference[];
+  truncated: boolean;
+}
+
+export interface CallGraphTraceStep {
+  from: string;
+  to: string;
+  /** Relationship followed from `from` to `to`. */
+  relation: "calls" | "calledBy";
+}
+
+export interface CallGraphTraceResult {
+  operation: "trace";
+  from: string;
+  to: string;
+  direction: CallGraphDirection;
+  maxDepth: number;
+  resolution: "exact" | "ambiguous" | "missing";
+  found: boolean;
+  path?: CallGraphSymbolReference[];
+  steps?: CallGraphTraceStep[];
+  fromCandidates?: CallGraphSymbolReference[];
+  toCandidates?: CallGraphSymbolReference[];
+  truncated: boolean;
+}
+
+export type CallGraphNavigationResult =
+  | CallGraphFindResult
+  | CallGraphInspectResult
+  | CallGraphExploreResult
+  | CallGraphTraceResult;
+
+export type CallGraphNavigationRequest =
+  | { operation: "find"; query: string; limit?: number }
+  | { operation: "inspect"; query: string; limit?: number }
+  | { operation: "explore"; query: string; direction?: CallGraphDirection; depth?: number; limit?: number }
+  | { operation: "trace"; from: string; to: string; direction?: CallGraphDirection; maxDepth?: number };
+
 export interface TypeScriptProjectContext {
   root: string;
   out: string;

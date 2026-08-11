@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "author": "codex",
+  "model": "gpt-5.6-terra",
+  "benchmarkCommit": "4c1ed743dd7ed07aec0150b0ffd5da44822d7a8b",
+  "question": "In the x402-marketplace project folder. Can you help me understand the system at a high level (which blocks interact with eachother and critical components). And where exactly the smart contract for the business gets created?",
+  "validation": {
+    "repositoryPaths": true,
+    "symbolOccurrences": true,
+    "positiveControl": true,
+    "negativeControl": true
+  }
+}

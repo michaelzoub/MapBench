@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "id": "map-project",
-  "title": "Map the production architecture",
+  "id": "trace-final-answer-validation",
+  "title": "Trace research-agent final-answer validation",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_json.py",
+      "{sharedGraders}/grade_json.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}"

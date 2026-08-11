@@ -160,11 +160,11 @@ test("private graders must be outside the Codex workspace", async () => {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test("project-local custom eval files are removed from the agent workspace", async () => {
+test("project-local task files are removed from the agent workspace", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-private-task-"));
   try {
     const { repo } = await makeGitRepository(root);
-    const task = path.join(repo, ".project-outline-evals", "private-task");
+    const task = path.join(repo, "tasks", "private-task");
     await fs.mkdir(path.join(task, "grader"), { recursive: true });
     await fs.writeFile(path.join(task, "grader", "expected.json"), "secret oracle\n");
     for (const args of [["add", "-A"], ["commit", "-qm", "add local eval"]]) {
@@ -173,10 +173,10 @@ test("project-local custom eval files are removed from the agent workspace", asy
     }
     const commit = (await runProcess(["git", "rev-parse", "HEAD"], { cwd: repo, timeoutMs: 10_000 })).stdout.trim();
     const workspace = await createWorkspace(repo, commit, "run", path.join(root, "workspaces"));
-    assert.equal(await fs.access(path.join(workspace, ".project-outline-evals", "private-task", "grader", "expected.json")).then(() => true, () => false), true);
-    assert.equal(await removePrivateTaskFromWorkspace(workspace, repo, path.join(repo, ".project-outline-evals")), ".project-outline-evals");
-    assert.equal(await fs.access(path.join(workspace, ".project-outline-evals")).then(() => true, () => false), false);
-    assert.match(await fs.readFile(path.join(repo, ".project-outline-evals", "private-task", "grader", "expected.json"), "utf8"), /secret oracle/);
+    assert.equal(await fs.access(path.join(workspace, "tasks", "private-task", "grader", "expected.json")).then(() => true, () => false), true);
+    assert.equal(await removePrivateTaskFromWorkspace(workspace, repo, path.join(repo, "tasks")), "tasks");
+    assert.equal(await fs.access(path.join(workspace, "tasks")).then(() => true, () => false), false);
+    assert.match(await fs.readFile(path.join(repo, "tasks", "private-task", "grader", "expected.json"), "utf8"), /secret oracle/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -184,7 +184,7 @@ test("custom eval scaffold grades real expected artifacts and rejects decoys", a
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-scaffold-"));
   try {
     const { repo } = await makeGitRepository(root);
-    const tasksRoot = path.join(repo, ".project-outline-evals");
+    const tasksRoot = path.join(root, "tasks");
     const task = await scaffoldEvalTask({ tasksRoot, id: "find-entrypoint", title: "Find entrypoint" });
     await assert.rejects(scaffoldEvalTask({ tasksRoot, id: "find-entrypoint" }), /already exists/);
     const expected = path.join(task, "grader", "expected.json");
@@ -211,6 +211,7 @@ test("Codex-authored eval creation grounds its grader and exercises the real pos
     const { repo } = await makeGitRepository(root);
     const created = await createAuthoredEval({
       repo,
+      tasksRoot: path.join(root, "tasks"),
       id: "explain-outer",
       title: "Explain outer",
       question: "Which symbol is the public entry point and what does it call?",
@@ -241,8 +242,9 @@ test("benchmark ask non-interactively runs the one-command authored-eval path", 
     await fs.writeFile(fakeCodex, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nconst index = process.argv.indexOf("--output-last-message");\nwriteFileSync(process.argv[index + 1], JSON.stringify({ requiredFiles: ["src/main.ts"], requiredSymbols: [{ name: "outer", path: "src/main.ts" }] }));\n`);
     await fs.chmod(fakeCodex, 0o755);
     process.env.PROJECT_OUTLINE_CODEX = fakeCodex;
-    await runBenchmarkCli(["ask", "--repo", repo, "--task", "Explain Outer", "--question", "Where does outer delegate?", "--no-run"]);
-    const directory = path.join(repo, ".project-outline-evals", "explain-outer");
+    const tasksRoot = path.join(root, "tasks");
+    await runBenchmarkCli(["ask", "--repo", repo, "--tasks", tasksRoot, "--task", "Explain Outer", "--question", "Where does outer delegate?", "--no-run"]);
+    const directory = path.join(tasksRoot, "explain-outer");
     assert.match(await fs.readFile(path.join(directory, "prompt.md"), "utf8"), /Where does outer delegate/);
     assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, "grader", "expected.json"), "utf8")), {
       requiredFiles: ["src/main.ts"], requiredSymbols: [{ name: "outer", path: "src/main.ts" }],
@@ -386,7 +388,7 @@ test("architecture answer graders accept repository facts and reject decoys", as
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-architecture-graders-"));
   try {
     const { repo } = await makeGitRepository(root);
-    const grader = path.resolve("benchmark/grading/grade_json.py");
+    const grader = path.resolve("benchmark/graders/grade_json.py");
     const answers: Record<string, unknown> = {
       "map-project": {
         entrypoint: { metadata_path: "setup.cfg", command: "autore", target: "research_harness.cli:main" },
@@ -453,7 +455,7 @@ test("architecture answer graders accept repository facts and reject decoys", as
     for (const [taskId, answer] of Object.entries(answers)) {
       const answerFile = path.join(root, `${taskId}.json`);
       await fs.writeFile(answerFile, `${JSON.stringify(answer)}\n`);
-      const rubric = path.resolve("benchmark/tasks", taskId, "grader/rubric.json");
+      const rubric = path.resolve("tasks", taskId, "grader/rubric.json");
       const positive = await runProcess(["python3", grader, rubric, answerFile, repo], { cwd: repo, timeoutMs: 10_000 });
       assert.equal(positive.exitCode, 0, `${taskId}: ${positive.stdout} ${positive.stderr}`);
 
@@ -481,8 +483,8 @@ test("localization grader measures ranking and trace budget while rejecting forg
       item: { type: "command_execution", command: "sed -n '1,20p' src/domain/payment-validator.ts", status: "completed", exit_code: 0,
         aggregated_output: "export class PaymentValidator {\n validate(input: unknown) {}\n}" },
     }));
-    const grader = path.resolve("benchmark/grading/grade_localization.py");
-    const rubric = path.resolve("benchmark/tasks/issue-to-symbol-localization/grader/rubric.json");
+    const grader = path.resolve("benchmark/graders/grade_localization.py");
+    const rubric = path.resolve("tasks/issue-to-symbol-localization/grader/rubric.json");
     const positive = await runProcess(["python3", grader, rubric, answer, materialized.repo, events], { cwd: materialized.repo, timeoutMs: 10_000 });
     assert.equal(positive.exitCode, 0, positive.stdout + positive.stderr);
     const positiveResult = JSON.parse(positive.stdout.trim());
@@ -539,8 +541,8 @@ test("execution-path grader scores real nodes and edges while rejecting a plausi
       validation: { symbol: "PaymentValidator.validate", behavior: "validates the payment command" },
       sideEffects: ["DatabaseAdapter calls payments.set to retain the payment"],
     }));
-    const grader = path.resolve("benchmark/grading/grade_execution_path.py");
-    const rubric = path.resolve("benchmark/tasks/reconstruct-payment-execution-path/grader/rubric.json");
+    const grader = path.resolve("benchmark/graders/grade_execution_path.py");
+    const rubric = path.resolve("tasks/reconstruct-payment-execution-path/grader/rubric.json");
     const positive = await runProcess(["python3", grader, rubric, answer, materialized.repo, events], { cwd: materialized.repo, timeoutMs: 10_000 });
     assert.equal(positive.exitCode, 0, positive.stdout + positive.stderr);
     const metrics = JSON.parse(positive.stdout.trim()).metrics;

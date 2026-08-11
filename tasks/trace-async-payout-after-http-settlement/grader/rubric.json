@@ -1,0 +1,75 @@
+{
+  "requiresCleanWorkspace": true,
+  "checks": [
+    {
+      "name": "expected_async_boundary_verdict",
+      "kind": "string_contains",
+      "path": "verdict",
+      "expected": ["expected", "async"],
+      "weight": 0.15
+    },
+    {
+      "name": "settled_payment_pending_payout_boundary",
+      "kind": "object_fields_contain",
+      "path": "settlement_boundary",
+      "expected": {
+        "payment_status": "SETTLED",
+        "payout_status": "PENDING",
+        "funds_holder": "MerchantRouter"
+      },
+      "weight": 0.15
+    },
+    {
+      "name": "payment_state_machine",
+      "kind": "ordered_contains",
+      "path": "payment_states",
+      "expected": ["CREATED", "VERIFIED", "SETTLED"],
+      "weight": 0.1
+    },
+    {
+      "name": "payout_state_machine",
+      "kind": "ordered_contains",
+      "path": "payout_states",
+      "expected": ["PENDING", "CLAIMED", "SUBMITTED", "CONFIRMED"],
+      "weight": 0.1
+    },
+    {
+      "name": "two_distinct_onchain_calls",
+      "kind": "object_list_fields_contain",
+      "path": "onchain_calls",
+      "expected": [
+        {
+          "function": "transferWithAuthorization",
+          "recipient": "MerchantRouter"
+        },
+        {
+          "contract": "MerchantRouter",
+          "function": "executePayout"
+        }
+      ],
+      "weight": 0.15
+    },
+    {
+      "name": "cross_layer_production_path",
+      "kind": "object_list_component_contains",
+      "path": "production_path",
+      "expected": [
+        {"path": "examples/express/src/server.ts", "symbol": "marketplace.protect"},
+        {"path": "packages/marketplace/src/marketplace.ts", "symbol": "onAfterSettle"},
+        {"path": "packages/marketplace/src/settlement.ts", "symbol": "ViemSettlementValidator.validate"},
+        {"path": "packages/marketplace/src/store.ts", "symbol": "SqliteMarketplaceStore.confirmPaymentAndEnqueue"},
+        {"path": "packages/marketplace/src/worker.ts", "symbol": "PayoutWorker.runOnce"},
+        {"path": "packages/marketplace/src/worker.ts", "symbol": "ViemPayoutExecutor.prepare"},
+        {"path": "packages/contracts/src/MerchantRouter.sol", "symbol": "MerchantRouter.executePayout"}
+      ],
+      "weight": 0.25
+    },
+    {
+      "name": "onchain_replay_guards",
+      "kind": "list_contains",
+      "path": "replay_guards",
+      "expected": ["usedPaymentIds", "usedNonces"],
+      "weight": 0.1
+    }
+  ]
+}

@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "id": "pinpoint-worker-delegation",
-  "title": "Pinpoint delegated-worker execution",
+  "id": "map-project",
+  "title": "Map the research-agent production architecture",
   "promptFile": "prompt.md",
   "grader": {
     "command": [
       "python3",
-      "{grader}/../../../grading/grade_json.py",
+      "{sharedGraders}/grade_json.py",
       "{grader}/rubric.json",
       "{answer}",
       "{workspace}"

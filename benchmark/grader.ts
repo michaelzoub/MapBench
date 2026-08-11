@@ -1,5 +1,5 @@
 import { runProcess } from "./process.js";
-import { expandCommand } from "./tasks.js";
+import { expandCommand } from "./task-loader.js";
 import type { CheckResult, CommandSpec, GraderResult, LoadedTask } from "./types.js";
 
 export function unavailableCheck(): CheckResult {

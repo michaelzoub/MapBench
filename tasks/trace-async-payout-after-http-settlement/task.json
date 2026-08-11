@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "trace-async-payout-after-http-settlement",
+  "title": "Trace x402 asynchronous payout after HTTP settlement",
+  "promptFile": "prompt.md",
+  "grader": {
+    "command": [
+      "python3",
+      "{grader}/grade_json.py",
+      "{grader}/rubric.json",
+      "{answer}",
+      "{workspace}"
+    ],
+    "timeoutMs": 30000
+  }
+}
