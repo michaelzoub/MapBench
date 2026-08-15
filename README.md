@@ -1,6 +1,6 @@
 # project-outline
 
-`project-outline` turns a TypeScript/JavaScript or Python repository into a small set of deterministic architecture aids. It uses static analysis—not an LLM—to map declarations, repository-local calls, construction, unresolved dynamic boundaries, and selected external dependencies.
+`project-outline` turns TypeScript, JavaScript, Python, Go, and Rust repositories into a small set of deterministic architecture aids. It uses Tree-sitter-based static analysis—not an LLM—to map declarations, repository-local calls, construction, unresolved dynamic boundaries, and selected external dependencies.
 
 The goal is progressive navigation: start with a compact system view, follow only the relevant symbols, and open real source when static analysis cannot establish runtime behavior.
 
@@ -22,7 +22,7 @@ project-outline watch
 project-outline clean
 ```
 
-Use `--root`, `--out`, or `--language typescript|python` to override detection and output paths. Generation writes only inside the output directory; `init` is the one command that may update the repository's root `AGENTS.md`.
+Use `--root`, `--out`, or `--language typescript|javascript|python|go|rust` to override detection and output paths. Generation writes only inside the output directory; `init` is the one command that may update the repository's root `AGENTS.md`.
 
 ## What it generates
 
@@ -36,7 +36,7 @@ All mapping views come from the same parsed symbol graph, but answer different q
 | Mermaid module map | `.project-outline/architecture.mmd` | A bounded human overview of module and dependency relationships | Aggregates the graph and intentionally omits detail |
 | Agent guidance | `.project-outline/AGENTS.md` | A compact protocol for using the other artifacts | Guidance only; it contains no extra analysis |
 
-The generator detects meaningful application source, parses declarations/imports with the TypeScript compiler API or Python AST, resolves statically knowable repository relationships, preserves ambiguous/external boundaries separately, and derives every view from that shared graph.
+The generator detects meaningful application source, parses every supported language with its maintained Tree-sitter grammar, normalizes syntax into one language-independent IR, resolves statically knowable repository relationships, preserves ambiguous/external boundaries separately, and derives every view from that shared graph.
 
 See [Static analysis and mapping](docs/static-analysis.md) for supported syntax, graph fields, language detection, exclusions, and known limits.
 

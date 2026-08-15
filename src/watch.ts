@@ -1,6 +1,4 @@
-import path from "node:path";
-import ts from "typescript";
-import { isInside } from "./files.js";
+import { promises as fs } from "node:fs";
 import { generateOutline } from "./generate.js";
 import { detectProject } from "./detection.js";
 import type { OutlineOptions, WatchHandle } from "./types.js";
@@ -12,7 +10,6 @@ export async function watchOutline(
 ): Promise<WatchHandle> {
   const initial = await generateOutline(options);
   onGenerate(`Generated ${initial.filesWritten} outline file${initial.filesWritten === 1 ? "" : "s"}.`);
-  const context = await detectProject(options);
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let running = false;
@@ -38,19 +35,30 @@ export async function watchOutline(
     }
   };
 
-  const watcher = ts.sys.watchDirectory?.(context.root, (changedPath) => {
-    const absolute = path.resolve(changedPath);
-    if (closed || isInside(context.out, absolute)) return;
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => void run(), 100);
-  }, true);
-
-  if (!watcher) throw new Error("Recursive directory watching is unavailable in this environment.");
+  const snapshot = async (): Promise<string> => {
+    const detected = await detectProject(options);
+    const files = detected.languages.flatMap((language) => detected.files[language]).sort();
+    const records = await Promise.all(files.map(async (fileName) => {
+      const stats = await fs.stat(fileName);
+      return `${fileName}\0${stats.size}\0${stats.mtimeMs}`;
+    }));
+    return records.join("\n");
+  };
+  let previous = await snapshot();
+  const watcher = setInterval(() => {
+    if (closed || running) return;
+    void snapshot().then((current) => {
+      if (current === previous) return;
+      previous = current;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void run(), 100);
+    }).catch(onError);
+  }, 150);
   return {
     close(): void {
       closed = true;
       if (timer) clearTimeout(timer);
-      watcher.close();
+      clearInterval(watcher);
     },
   };
 }

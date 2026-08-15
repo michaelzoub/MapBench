@@ -1,0 +1,67 @@
+{
+  "go/main.go#goEntry": {
+    "file": "go/main.go",
+    "line": 3,
+    "column": 1,
+    "endLine": 3,
+    "endColumn": 18,
+    "startByte": 14,
+    "endByte": 31,
+    "kind": "function",
+    "signature": "goEntry()",
+    "calls": [],
+    "calledBy": []
+  },
+  "python/main.py#python_entry": {
+    "file": "python/main.py",
+    "line": 1,
+    "column": 1,
+    "endLine": 2,
+    "endColumn": 9,
+    "startByte": 0,
+    "endByte": 36,
+    "kind": "function",
+    "signature": "python_entry() -> None",
+    "calls": [],
+    "calledBy": []
+  },
+  "rust/main.rs#rust_entry": {
+    "file": "rust/main.rs",
+    "line": 1,
+    "column": 1,
+    "endLine": 1,
+    "endColumn": 19,
+    "startByte": 0,
+    "endByte": 18,
+    "kind": "function",
+    "signature": "rust_entry()",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/legacy.js#legacy": {
+    "file": "src/legacy.js",
+    "line": 1,
+    "column": 8,
+    "endLine": 1,
+    "endColumn": 28,
+    "startByte": 7,
+    "endByte": 27,
+    "kind": "function",
+    "signature": "legacy()",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/main.ts#typed": {
+    "file": "src/main.ts",
+    "line": 1,
+    "column": 8,
+    "endLine": 1,
+    "endColumn": 33,
+    "startByte": 7,
+    "endByte": 32,
+    "kind": "function",
+    "signature": "typed(): void",
+    "calls": [],
+    "calledBy": []
+  }
+}

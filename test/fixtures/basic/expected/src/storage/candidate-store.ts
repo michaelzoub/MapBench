@@ -3,11 +3,13 @@
 import type { Candidate } from "../types.js";
 
 export interface StoreOptions {
-    namespace: string;
+  namespace: string;
 }
 
 export class CandidateStore {
-    private cache: Map<string, Candidate>;
-    constructor(public readonly options: StoreOptions) { }
-    async find(id: string): Promise<Candidate | undefined> { }
+  private cache = undefined;
+
+  constructor(public readonly options: StoreOptions) { }
+
+  async find(id: string): Promise<Candidate | undefined> { }
 }

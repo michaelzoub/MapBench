@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { generateOutline } from "../src/index.js";
+import { generateOutline, navigateOutline } from "../src/index.js";
 
 const fixtures = path.resolve(process.cwd(), "test/fixtures/languages");
 const execFileAsync = promisify(execFile);
@@ -33,10 +33,12 @@ test("detects and outlines a Python-only repository with Python-native relations
     const outline = await fs.readFile(path.join(result.out, "app/models.py"), "utf8");
     assert.match(outline, /^# @project-outline generated/);
     assert.match(outline, /from \.storage import load_job/);
-    assert.doesNotMatch(outline, /from dataclasses|from enum|from typing/);
+    assert.match(outline, /from dataclasses import dataclass/);
+    assert.match(outline, /from enum import Enum/);
+    assert.match(outline, /from typing import Protocol/);
     assert.match(outline, /@dataclass\nclass Job:/);
-    assert.match(outline, /class State\(Enum\):[\s\S]*READY = 'ready'/);
-    assert.match(outline, /async def run\(self, job: Job, retries: int\s*=\s*3\) -> str:\n\s+[\"']{3}Calls: app\/models\.py#Worker\.prepare, app\/storage\.py#load_job; Unresolved project: self\.callback[\"']{3}\n\s+pass/);
+    assert.match(outline, /class State\(Enum\):[\s\S]*READY = ["']ready["']/);
+    assert.match(outline, /async def run\(self, job: Job, retries: int\s*=\s*\.\.\.\) -> str:\n\s+[\"']{3}Calls: app\/models\.py#Worker\.prepare, app\/storage\.py#load_job; Unresolved project: self\.callback[\"']{3}\n\s+pass/);
     assert.match(outline, /API_TOKEN = \.\.\./);
     assert.match(outline, /def authenticate\(user: str, api_token: str\s*=\s*\.\.\.\) -> bool/);
     assert.doesNotMatch(outline, /must-not-leak|private-default|default-secret|select \*/);
@@ -62,7 +64,7 @@ test("detects and outlines a Python-only repository with Python-native relations
 test("detects TypeScript-only and ignores incidental frontend HTML", async () => {
   await withFixture("typescript-only", async (root) => {
     const typescript = await generateOutline({ root });
-    assert.deepEqual(typescript.languages, ["typescript"]);
+    assert.deepEqual(typescript.languages, ["typescript", "javascript"]);
     assert.equal(await fs.readFile(path.join(typescript.out, "src/main.ts"), "utf8").then(() => true), true);
     const javascript = await fs.readFile(path.join(typescript.out, "src/legacy.js"), "utf8");
     assert.match(javascript, /export const version = undefined/);
@@ -159,13 +161,115 @@ test("CLI accepts the language override", async () => {
   });
 });
 
-test("unsupported and genuinely ambiguous repositories fail with manual guidance", async () => {
-  await withFixture("unsupported", async (root) => assert.rejects(
-    generateOutline({ root }),
-    /No supported language.*--language typescript or --language python/s,
-  ));
+test("Go repositories are supported and repositories without source fail with manual guidance", async () => {
+  await withFixture("unsupported", async (root) => {
+    const result = await generateOutline({ root });
+    assert.deepEqual(result.languages, ["go"]);
+    assert.match(await fs.readFile(path.join(result.out, "main.go"), "utf8"), /^\/\/ @project-outline generated/);
+  });
   await withFixture("ambiguous", async (root) => assert.rejects(
     generateOutline({ root }),
-    /ambiguous.*--language typescript or --language python/s,
+    /No supported language.*--language typescript, javascript, python, go, or rust/s,
   ));
+});
+
+test("JavaScript Tree-sitter analysis preserves navigation and conservative boundaries", async () => {
+  await withFixture("javascript-only", async (root) => {
+    const first = await generateOutline({ root });
+    assert.deepEqual(first.languages, ["javascript"]);
+    const serialized = await fs.readFile(path.join(first.out, "callgraph.json"), "utf8");
+    assert.doesNotMatch(serialized, /private-name|private-constructor-value/);
+    const graph = JSON.parse(serialized);
+    const run = "src/service.js#Service.run";
+    const validate = "src/validation.js#validate";
+    assert.equal(graph["src/service.js#Service.constructor"].kind, "constructor");
+    assert.deepEqual(graph[run].calls, [validate]);
+    assert.deepEqual(graph[run].unresolvedProjectCalls, ["dependency.process"]);
+    assert.deepEqual(graph[run].externalCalls, ["node:crypto#randomUUID"]);
+    assert.deepEqual(graph["src/service.js#createService"].instantiates, ["src/service.js#Service"]);
+    const skeleton = await fs.readFile(path.join(first.out, "src/service.js"), "utf8");
+    assert.doesNotMatch(skeleton, /private-name|private-constructor-value/);
+    assert.match(skeleton, /class Service/);
+
+    const found = await navigateOutline({ operation: "find", query: "Service.run" }, { root });
+    assert.equal(found.operation, "find");
+    if (found.operation !== "find") throw new Error("expected find result");
+    assert.equal(found.matches[0]?.id, run);
+    const inspected = await navigateOutline({ operation: "inspect", query: run }, { root });
+    assert.equal(inspected.operation, "inspect");
+    if (inspected.operation !== "inspect") throw new Error("expected inspect result");
+    assert.deepEqual(inspected.symbol?.callees.map((item) => item.id), [validate]);
+    const explored = await navigateOutline({ operation: "explore", query: run, direction: "callees", depth: 1 }, { root });
+    assert.equal(explored.operation, "explore");
+    if (explored.operation !== "explore") throw new Error("expected explore result");
+    assert.deepEqual(explored.edges, [[run, validate]]);
+    const traced = await navigateOutline({ operation: "trace", from: run, to: validate }, { root });
+    assert.equal(traced.operation, "trace");
+    if (traced.operation !== "trace") throw new Error("expected trace result");
+    assert.equal(traced.found, true);
+    assert.match(await fs.readFile(path.join(first.out, "architecture.md"), "utf8"), /Service\.run.*validate/s);
+    await generateOutline({ root });
+    assert.equal(await fs.readFile(path.join(first.out, "callgraph.json"), "utf8"), serialized);
+  });
+});
+
+test("Go Tree-sitter analysis links packages, methods, construction, and external calls", async () => {
+  await withFixture("go-only", async (root) => {
+    const result = await generateOutline({ root });
+    assert.deepEqual(result.languages, ["go"]);
+    const graph = JSON.parse(await fs.readFile(path.join(result.out, "callgraph.json"), "utf8"));
+    const run = "service/worker.go#Worker.Run";
+    assert.deepEqual(graph[run].calls, ["store/store.go#Load"]);
+    assert.deepEqual(graph[run].externalCalls, ["fmt#Println"]);
+    assert.deepEqual(graph[run].unresolvedProjectCalls, ["service.Process"]);
+    assert.deepEqual(graph["service/worker.go#NewWorker"].instantiates, ["service/worker.go#Worker"]);
+    const skeleton = await fs.readFile(path.join(result.out, "service/worker.go"), "utf8");
+    assert.match(skeleton, /type Runner interface/);
+    assert.doesNotMatch(skeleton, /result :=|go-secret/);
+    assert.match(await fs.readFile(path.join(result.out, "architecture.md"), "utf8"), /Worker\.Run.*store\/store\.go#Load/s);
+    const traced = await navigateOutline({ operation: "trace", from: run, to: "store/store.go#Load" }, { root });
+    assert.equal(traced.operation, "trace");
+    if (traced.operation !== "trace") throw new Error("expected trace result");
+    assert.equal(traced.found, true);
+  });
+});
+
+test("Rust Tree-sitter analysis links modules, impl methods, constructors, and boundaries", async () => {
+  await withFixture("rust-only", async (root) => {
+    const result = await generateOutline({ root });
+    assert.deepEqual(result.languages, ["rust"]);
+    const graph = JSON.parse(await fs.readFile(path.join(result.out, "callgraph.json"), "utf8"));
+    const run = "src/lib.rs#Worker.run";
+    assert.equal(graph["src/lib.rs#Worker.new"].kind, "constructor");
+    assert.deepEqual(graph["src/lib.rs#Worker.new"].instantiates, ["src/lib.rs#Worker"]);
+    assert.deepEqual(graph[run].calls, ["src/store.rs#load"]);
+    assert.deepEqual(graph[run].externalCalls, ["external#Client::new"]);
+    assert.deepEqual(graph[run].unresolvedProjectCalls, ["service.process"]);
+    const skeleton = await fs.readFile(path.join(result.out, "src/lib.rs"), "utf8");
+    assert.match(skeleton, /pub trait Runner/);
+    assert.doesNotMatch(skeleton, /let _client|rust-secret/);
+    assert.match(await fs.readFile(path.join(result.out, "architecture.md"), "utf8"), /Worker\.run.*src\/store\.rs#load/s);
+    const inspected = await navigateOutline({ operation: "inspect", query: run }, { root });
+    assert.equal(inspected.operation, "inspect");
+    if (inspected.operation !== "inspect") throw new Error("expected inspect result");
+    assert.deepEqual(inspected.symbol?.callees.map((item) => item.id), ["src/store.rs#load"]);
+  });
+});
+
+test("mixed repositories parse every supported language deterministically", async () => {
+  await withFixture("polyglot", async (root) => {
+    const result = await generateOutline({ root });
+    assert.deepEqual(result.languages, ["typescript", "javascript", "python", "go", "rust"]);
+    const before = await fs.readFile(path.join(result.out, "callgraph.json"), "utf8");
+    const graph = JSON.parse(before);
+    assert.deepEqual(Object.keys(graph), [
+      "go/main.go#goEntry",
+      "python/main.py#python_entry",
+      "rust/main.rs#rust_entry",
+      "src/legacy.js#legacy",
+      "src/main.ts#typed",
+    ]);
+    await generateOutline({ root });
+    assert.equal(await fs.readFile(path.join(result.out, "callgraph.json"), "utf8"), before);
+  });
 });

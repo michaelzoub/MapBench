@@ -10,8 +10,8 @@ import type {
 const HELP = `project-outline
 
 Usage:
-  project-outline generate [--root <directory>] [--out <directory>] [--language <typescript|python>]
-  project-outline watch [--root <directory>] [--out <directory>] [--language <typescript|python>]
+  project-outline generate [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
+  project-outline watch [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
   project-outline clean [--root <directory>] [--out <directory>]
   project-outline init [--root <directory>] [--out <directory>]
   project-outline query find <terms> [--limit <1-100>] [--root <directory>] [--out <directory>]
@@ -33,8 +33,8 @@ function parseOptions(args: string[]): OutlineOptions {
     if (!value) throw new Error(`Missing value for ${flag}`);
     if (flag === "--root") options.root = value;
     else if (flag === "--out") options.out = value;
-    else if (value === "typescript" || value === "python") options.language = value;
-    else throw new Error(`Unsupported language: ${value}. Expected typescript or python.`);
+    else if (["typescript", "javascript", "python", "go", "rust"].includes(value)) options.language = value as OutlineOptions["language"];
+    else throw new Error(`Unsupported language: ${value}. Expected typescript, javascript, python, go, or rust.`);
   }
   return options;
 }

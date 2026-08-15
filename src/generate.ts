@@ -1,7 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createArchitectureSummary } from "./architecture.js";
-import { createCallGraph } from "./callgraph.js";
+import { createLinkedCallGraph } from "./analysis/linker.js";
+import { parseProject } from "./analysis/parser.js";
+import { createSkeleton } from "./analysis/skeleton.js";
 import { detectProject } from "./detection.js";
 import {
   assertOutputIsManaged,
@@ -11,29 +13,8 @@ import {
 } from "./files.js";
 import { createOutlineInstructions, outputReference } from "./instructions.js";
 import { createArchitectureMermaid } from "./mermaid.js";
-import { createProjectContext } from "./project.js";
-import { parsePythonProject } from "./python.js";
 import { createEmbeddedQueryScript } from "./query.js";
-import { outlineSourceFile } from "./transform.js";
-import type { CallGraph, GenerationResult, OutlineOptions } from "./types.js";
-
-function combineCallGraphs(graphs: readonly CallGraph[]): CallGraph {
-  const combined: CallGraph = {};
-  graphs.forEach((graph) => {
-    for (const [id, entry] of Object.entries(graph)) {
-      if (combined[id]) throw new Error(`Duplicate call graph symbol: ${id}`);
-      combined[id] = {
-        ...entry,
-        calledBy: [],
-      };
-    }
-  });
-  for (const [caller, entry] of Object.entries(combined)) {
-    for (const callee of entry.calls) combined[callee]?.calledBy.push(caller);
-  }
-  for (const entry of Object.values(combined)) entry.calledBy.sort();
-  return Object.fromEntries(Object.entries(combined).sort(([left], [right]) => left.localeCompare(right)));
-}
+import type { GenerationResult, OutlineOptions } from "./types.js";
 
 export async function generateOutline(options: OutlineOptions = {}): Promise<GenerationResult> {
   const detected = await detectProject(options);
@@ -41,26 +22,11 @@ export async function generateOutline(options: OutlineOptions = {}): Promise<Gen
   await assertOutputIsManaged(detected.out, detected.root);
 
   const generated = new Map<string, string>();
-  const graphs: CallGraph[] = [];
-  if (detected.languages.includes("typescript")) {
-    const context = await createProjectContext(options, detected.files.typescript);
-    const graph = createCallGraph(context);
-    for (const fileName of context.fileNames) {
-      const sourceFile = context.program.getSourceFile(fileName);
-      if (!sourceFile) continue;
-      const destination = path.join(context.out, path.relative(context.root, fileName));
-      generated.set(destination, outlineSourceFile(sourceFile, context, graph));
-    }
-    graphs.push(graph);
+  const project = await parseProject(detected);
+  const graph = createLinkedCallGraph(project);
+  for (const file of project.files) {
+    generated.set(path.join(detected.out, file.file), createSkeleton(file, graph));
   }
-  if (detected.languages.includes("python")) {
-    const parsed = await parsePythonProject(detected.root, detected.files.python);
-    for (const [relative, contents] of Object.entries(parsed.outlines)) {
-      generated.set(path.join(detected.out, relative), contents);
-    }
-    graphs.push(parsed.callgraph);
-  }
-  const graph = combineCallGraphs(graphs);
   generated.set(path.join(detected.out, "architecture.md"), createArchitectureSummary(graph));
   generated.set(path.join(detected.out, "architecture.mmd"), createArchitectureMermaid(graph));
   generated.set(path.join(detected.out, "callgraph.json"), `${JSON.stringify(graph, null, 2)}\n`);

@@ -7,18 +7,19 @@ This document describes what `project-outline` extracts, how the generated views
 Generation is deterministic and does not call an LLM.
 
 1. Resolve the repository root and a safe child output directory.
-2. Detect meaningful TypeScript/JavaScript and Python source.
-3. Parse declarations, imports, signatures, and relationships.
-4. Resolve repository-local symbols and statically knowable call/construction edges.
-5. Serialize one shared graph, then derive the skeleton, indexes, query helper, and Mermaid view.
+2. Detect meaningful TypeScript, JavaScript, Python, Go, and Rust source.
+3. Parse each file with the matching Tree-sitter grammar.
+4. Normalize declarations, imports, signatures, source locations, and references into a language-independent IR.
+5. Resolve repository-local symbols and statically knowable call/construction edges conservatively.
+6. Serialize one shared graph, then derive the skeleton, indexes, query helper, and Mermaid view.
 
 ### Language detection and source selection
 
-The CLI supports TypeScript/JavaScript and Python. It selects a clearly dominant language or generates both views for a mixed application. Use `--language typescript` or `--language python` when repository metadata is ambiguous.
+The CLI supports TypeScript, JavaScript, Python, Go, and Rust, including mixed-language repositories. Use `--language` with one of those names to limit generation to a single language.
 
-Source discovery excludes dependencies, generated output, tests, migrations, common build/infrastructure directories, and configuration files. A top-level `tasks/` directory is excluded so private eval data cannot enter generated agent context. HTML, CSS, and shell files are not treated as application source.
+Source discovery excludes dependencies, generated output, tests, migrations, common build/infrastructure directories, and configuration files. Benchmark-private `tasks/`, `tests/`, `verifier/`, `solution/`, and `reference_solution/` trees are excluded so held-out verification or reference code cannot enter generated agent context. HTML, CSS, and shell files are not treated as application source.
 
-The TypeScript analyzer uses a root `tsconfig.json` or `jsconfig.json` when present, including path aliases and compiler options. The Python analyzer requires Python 3.9 or newer, uses the standard-library AST, and can be pointed at another interpreter with `PROJECT_OUTLINE_PYTHON`.
+All syntax extraction originates from Tree-sitter. Language adapters describe grammar-specific declarations and references; they do not build artifacts themselves. The shared linker uses imports, module paths, local declarations, qualified identifiers, receiver/type annotations, assignments, and construction syntax when those signals identify one target. It leaves ambiguous targets unresolved rather than consulting a language compiler or guessing.
 
 ## The shared symbol graph
 
@@ -35,6 +36,8 @@ src/jobs.ts#Queue.run
 ```
 
 Every symbol includes a 1-based file/line/column jump target and a declaration signature. Relationship fields are omitted when empty.
+
+Every callable also records its exact Tree-sitter declaration range as `line`, `column`, `endLine`, `endColumn`, `startByte`, and `endByte`. Line and column values are 1-based; byte offsets are UTF-8 and use a half-open `[startByte, endByte)` range.
 
 | Field | Meaning |
 |---|---|
@@ -57,7 +60,7 @@ It is deliberately incomplete. Open the query interface or source before treatin
 
 ### Declaration skeleton (mirrored source paths)
 
-The skeleton preserves repository structure, local imports, declarations, classes, inheritance, decorators, type annotations, defaults, and signatures. Implementations, comments, docstrings, ordinary control flow, and values that may contain configuration or secrets are removed. Function bodies retain compact relationship metadata rather than executable behavior.
+The skeleton preserves repository structure, imports, declarations, classes/structs/interfaces/traits, inheritance, decorators or modifiers, type annotations, parameters, and signatures. Implementations, comments, docstrings, ordinary control flow, and default or assigned values that may contain configuration or secrets are removed. Function bodies retain compact relationship metadata rather than ordinary implementation behavior.
 
 Use it to identify candidate types and APIs, not to infer branch conditions or side effects that require implementation details.
 

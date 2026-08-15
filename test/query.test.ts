@@ -24,14 +24,18 @@ function entry(
   extra: Partial<CallGraphEntry> = {},
 ): CallGraphEntry {
   return {
+    ...extra,
     file,
     line,
     column: 1,
+    endLine: line,
+    endColumn: 2,
+    startByte: 0,
+    endByte: 1,
     kind: "function",
     signature: `${path.basename(file, ".ts")}(): void`,
     calls,
     calledBy,
-    ...extra,
   };
 }
 

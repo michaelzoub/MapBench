@@ -213,6 +213,10 @@ export function resumeResearchCommand(agent: ResearchAgent): Promise<string> {
       file: "src/research.ts",
       line: 11,
       column: 3,
+      endLine: 18,
+      endColumn: 4,
+      startByte: 198,
+      endByte: 402,
       kind: "method",
       signature: "run(objective: string): Promise<string>",
       calls: [

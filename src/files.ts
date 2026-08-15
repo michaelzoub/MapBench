@@ -7,6 +7,7 @@ import { MERMAID_HEADER } from "./mermaid.js";
 
 export const GENERATED_HEADER = "// @ts-nocheck";
 export const PYTHON_GENERATED_HEADER = "# @project-outline generated";
+export const TREE_SITTER_GENERATED_HEADER = "// @project-outline generated";
 
 export const EXCLUDED_DIRECTORIES = new Set([
   ".git",
@@ -32,10 +33,18 @@ export const EXCLUDED_DIRECTORIES = new Set([
   "node_modules",
   "out",
   "public",
+  "reference-solution",
+  "reference_solution",
   "scripts",
+  "solution",
+  "solutions",
   "target",
+  "test",
+  "tests",
   "tools",
   "vendor",
+  "verifier",
+  "verifiers",
 ]);
 
 const EXCLUDED_FILE_PATTERNS = [
@@ -73,9 +82,33 @@ export function isMeaningfulTypeScriptFile(fileName: string, root: string, out: 
   if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment)) || segments[0] === "tasks") return false;
 
   const baseName = path.basename(absolute);
-  if (!/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(baseName)) return false;
+  if (!/\.(?:[cm]?ts|tsx)$/i.test(baseName)) return false;
   return !EXCLUDED_FILE_PATTERNS.some((pattern) => pattern.test(baseName));
 }
+
+export function isMeaningfulJavaScriptFile(fileName: string, root: string, out: string): boolean {
+  const absolute = path.resolve(fileName);
+  if (!isInside(root, absolute) || isInside(out, absolute)) return false;
+  const relative = path.relative(root, absolute);
+  const segments = relative.split(path.sep).map((segment) => segment.toLowerCase());
+  if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment)) || segments[0] === "tasks") return false;
+  const baseName = path.basename(absolute);
+  return /\.(?:[cm]?js|jsx)$/i.test(baseName) && !EXCLUDED_FILE_PATTERNS.some((pattern) => pattern.test(baseName));
+}
+
+function meaningfulExtension(fileName: string, root: string, out: string, extension: string): boolean {
+  const absolute = path.resolve(fileName);
+  if (!isInside(root, absolute) || isInside(out, absolute)) return false;
+  const relative = path.relative(root, absolute);
+  const segments = relative.split(path.sep).map((segment) => segment.toLowerCase());
+  return !segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment)) && segments[0] !== "tasks" &&
+    path.extname(absolute).toLowerCase() === extension;
+}
+
+export const isMeaningfulGoFile = (fileName: string, root: string, out: string): boolean =>
+  meaningfulExtension(fileName, root, out, ".go") && !/_test\.go$/i.test(fileName);
+export const isMeaningfulRustFile = (fileName: string, root: string, out: string): boolean =>
+  meaningfulExtension(fileName, root, out, ".rs");
 
 export function isMeaningfulPythonFile(fileName: string, root: string, out: string): boolean {
   const absolute = path.resolve(fileName);
@@ -110,8 +143,20 @@ export async function discoverTypeScriptFiles(root: string, out: string): Promis
   return files.sort();
 }
 
+export async function discoverJavaScriptFiles(root: string, out: string): Promise<string[]> {
+  return discoverFiles(root, out, isMeaningfulJavaScriptFile);
+}
+
 export async function discoverPythonFiles(root: string, out: string): Promise<string[]> {
   return discoverFiles(root, out, isMeaningfulPythonFile);
+}
+
+export async function discoverGoFiles(root: string, out: string): Promise<string[]> {
+  return discoverFiles(root, out, isMeaningfulGoFile);
+}
+
+export async function discoverRustFiles(root: string, out: string): Promise<string[]> {
+  return discoverFiles(root, out, isMeaningfulRustFile);
 }
 
 async function discoverFiles(
@@ -200,7 +245,12 @@ function isCallGraph(value: unknown): boolean {
       stringArray(candidate.calls) && stringArray(candidate.calledBy)
     );
     const optionalStringArray = (items: unknown): boolean => items === undefined || stringArray(items);
+    const exactRange = typeof candidate.endLine === "number" && Number.isInteger(candidate.endLine) && candidate.endLine > 0 &&
+      typeof candidate.endColumn === "number" && Number.isInteger(candidate.endColumn) && candidate.endColumn > 0 &&
+      typeof candidate.startByte === "number" && Number.isInteger(candidate.startByte) && candidate.startByte >= 0 &&
+      typeof candidate.endByte === "number" && Number.isInteger(candidate.endByte) && candidate.endByte > candidate.startByte;
     const current = typeof candidate.column === "number" && Number.isInteger(candidate.column) && candidate.column > 0 &&
+      (exactRange || candidate.endLine === undefined) &&
       [candidate.instantiates, candidate.unresolvedProjectCalls, candidate.externalCalls].every(optionalStringArray) &&
       (candidate.callsInSourceOrder === undefined || stringArray(candidate.callsInSourceOrder));
     // Accept the previous format so a generation can safely replace its own managed output.
@@ -220,6 +270,7 @@ export async function assertOutputIsManaged(out: string, root = path.dirname(out
     else if (relative === "architecture.mmd") managed = contents.startsWith(MERMAID_HEADER);
     else if (/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(fileName)) managed = contents.startsWith(GENERATED_HEADER);
     else if (path.extname(fileName).toLowerCase() === ".py") managed = contents.startsWith(PYTHON_GENERATED_HEADER);
+    else if ([".go", ".rs"].includes(path.extname(fileName).toLowerCase())) managed = contents.startsWith(TREE_SITTER_GENERATED_HEADER);
     else if (relative === "AGENTS.md") managed = isManagedOutlineInstructions(contents, outputReference(root, out));
     else if (relative === "callgraph.json") {
       try {

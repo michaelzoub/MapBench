@@ -1,0 +1,22 @@
+%% @project-outline generated
+%% Deterministic module-level view derived from the generated static call graph.
+flowchart LR
+  subgraph group_0["go"]
+    direction TB
+    module_0["main.go<br/>1 callable"]
+  end
+  subgraph group_1["python"]
+    direction TB
+    module_1["main.py<br/>1 callable"]
+  end
+  subgraph group_2["rust"]
+    direction TB
+    module_2["main.rs<br/>1 callable"]
+  end
+  subgraph group_3["src"]
+    direction TB
+    module_3["legacy.js<br/>1 callable"]
+    module_4["main.ts<br/>1 callable"]
+  end
+  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px
+  classDef omitted fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 4,color:#475569

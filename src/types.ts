@@ -1,6 +1,4 @@
-import type ts from "typescript";
-
-export type SupportedLanguage = "typescript" | "python";
+export type SupportedLanguage = "typescript" | "javascript" | "python" | "go" | "rust";
 
 export interface OutlineOptions {
   root?: string;
@@ -109,15 +107,6 @@ export type CallGraphNavigationRequest =
   | { operation: "explore"; query: string; direction?: CallGraphDirection; depth?: number; limit?: number }
   | { operation: "trace"; from: string; to: string; direction?: CallGraphDirection; maxDepth?: number };
 
-export interface TypeScriptProjectContext {
-  root: string;
-  out: string;
-  configPath?: string;
-  compilerOptions: ts.CompilerOptions;
-  fileNames: string[];
-  program: ts.Program;
-}
-
 export interface GenerationResult {
   root: string;
   out: string;
@@ -132,6 +121,14 @@ export interface CallGraphEntry {
   file: string;
   line: number;
   column: number;
+  /** 1-based line containing the declaration's exclusive end point. */
+  endLine: number;
+  /** Exclusive 1-based UTF-8 byte column of the declaration end. */
+  endColumn: number;
+  /** Inclusive UTF-8 byte offset in the source file. */
+  startByte: number;
+  /** Exclusive UTF-8 byte offset in the source file. */
+  endByte: number;
   kind: CallGraphSymbolKind;
   signature: string;
   /** Statically resolved repository callees, identified as `<file>#<qualified symbol>`. */

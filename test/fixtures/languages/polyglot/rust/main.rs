@@ -1,0 +1,1 @@
+fn rust_entry() {}
