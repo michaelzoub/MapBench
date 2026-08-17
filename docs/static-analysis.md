@@ -86,7 +86,7 @@ Ambiguous short names return candidates instead of silently selecting a symbol. 
 
 ### Mermaid module map (`architecture.mmd`)
 
-The Mermaid view is a bounded human visualization derived from the same call-graph projection. It is not included in benchmark treatments.
+The Mermaid view is a bounded deterministic system map projected directly from the canonical IR. It groups modules by stable package/directory/component boundaries, starts major execution flow at static entrypoints, emphasizes structural relationships such as imports, instantiation, implementation, and inheritance, and separates external systems and dependencies. Module importance is derived from entrypoint reachability, fan-in/fan-out, and downstream reach. Detailed symbol-level call relationships remain in the machine-readable call graph and are intentionally not repeated in Mermaid. The Mermaid view is not included in benchmark treatments.
 
 ## What static analysis cannot prove
 

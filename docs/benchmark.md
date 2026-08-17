@@ -57,7 +57,7 @@ For a real run, the harness:
 5. Generates the canonical structural IR internally, then exposes only the selected treatment. Architecture and skeleton projections live under `.mapbench/`; call-graph data stays outside the workspace and is reachable only through `mapbench_query`.
 6. Supplies condition instructions directly with Pi's appended system prompt. The checked-out source tree remains readable in every condition, but the instructions name only the selected MapBench aids.
 7. Commits a local condition baseline and records its Git tree hash.
-8. Starts a new `pi --mode json --no-session` process with a fresh `PI_CODING_AGENT_DIR` containing only `auth.json` when file authentication is needed.
+8. Starts a new `pi --mode json --no-session` process with a fresh `PI_CODING_AGENT_DIR` containing only `auth.json` when file authentication is needed and, for Modal runs authenticated by profile, a private copy of `.modal.toml`.
 9. Persists JSONL events, stderr, the final answer, and workspace changes.
 10. Runs the private grader outside the Pi workspace, followed by any declared regression/typecheck/build checks.
 11. Deletes the workspace, private treatment directory, and isolated Pi home unless `--keep-workspaces` was requested.
@@ -81,7 +81,7 @@ The temporary layout for one run is:
     callgraph.json                call-graph conditions only
     query.mjs                     invoked only by the harness-owned query tool
   <cell>-pi-home/
-    auth.json                     optional; the only copied Pi state file
+    auth.json / .modal.toml        optional provider and Modal profile credentials
 ```
 
 The grader and result directory are also outside the working directory. Pi sees no shell or arbitrary process tool and receives this tool matrix:
@@ -99,12 +99,34 @@ This means architecture-only can and should inspect `src/` normally; it simply c
 For DeepSWE repository-edit tasks, Pi remains the harness process on the host, but its coding capabilities are split deliberately:
 
 - Every DeepSWE condition is read/write: `read`, `grep`, `find`, `ls`, `edit`, and `write` are registered by the same path-guarded extension and operate only on the disposable sanitized working tree. This includes architecture-only, which can edit the real source and read its architecture map but cannot see the other MapBench treatments.
-- `bash` is not a host shell. The extension forwards each command to one task-image container with `/app` bound to that working tree.
-- The agent and verifier containers apply each task's CPU and memory limits and use `--network none`; v1.1 tasks declare zero GPUs, and their storage limit remains recorded as provenance.
-- The private `tests/` directory is never copied or mounted into the agent container. A separate no-network verifier image receives only the persisted model patch after Pi exits.
+- `bash` is not a host shell. With the default Docker backend, the extension forwards each command to one task-image container with `/app` bound to the disposable working tree. With Modal, it synchronizes that same tree to the Sandbox before the command and back afterward; `read`/`edit`/`write` continue to operate on the synchronized guarded mirror.
+- The agent and verifier environments apply each task's CPU and memory limits and disable networking. DeepSWE v1.1 tasks declare zero GPUs. The requested storage allocation is recorded as provenance because Modal's public Sandbox API does not expose a disk-quota parameter.
+- The private `tests/` directory is never copied or mounted into the agent environment. A separate no-network verifier environment receives only the persisted model patch after Pi exits.
 - The task source checkout must be clean and exactly match the pinned DeepSWE v1.1 revision; the repository commit and environment image come from validated task metadata.
 
 Use `--deepswe <checkout> --task <id>` or the bounded `--task-set smoke`. Listing is explicit with `--deepswe <checkout> --list-tasks`; running every upstream task requires `--all` so an omitted selector cannot accidentally launch 113 × condition × repetition model calls.
+
+### Docker and Modal backends
+
+Docker remains the default and runs one task-condition cell at a time. Modal is opt-in for DeepSWE and permits independent cells to overlap while keeping each cell in a fresh Sandbox:
+
+```bash
+# One task on Modal
+bun run benchmark -- --deepswe ../deep-swe --task abs-module-cache-flags \
+  --backend modal --concurrency 1 --pricing off
+
+# The bounded two-task smoke set, with at most four cells active
+bun run benchmark -- --deepswe ../deep-swe --task-set smoke \
+  --backend modal --concurrency 4 --pricing off
+
+# Plan the identical task/condition/repetition matrix without contacting Modal
+bun run benchmark -- --deepswe ../deep-swe --task-set smoke \
+  --backend modal --concurrency 4 --pricing off --dry-run
+```
+
+Modal uses its normal `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` credentials (or `MODAL_PROFILE`). `--modal-app` defaults to `mapbench`; `--modal-environment`, `--modal-cloud`, and `--modal-region` select Modal placement without changing the task image. Each source extraction, agent run, and verifier run gets a distinct Sandbox created from the exact image in the pinned DeepSWE metadata. CPU and memory are set as both requests and hard limits, networking is blocked, and agent Sandboxes never receive `tests/`, `solution/`, or reference patches. Sandbox IDs, Modal SDK/runtime version, image, placement, requested resources, and concurrency are persisted in `config.json` and each `result.json`.
+
+The harness synchronizes the disposable repository mirror to Modal around every Pi shell command. This gives the existing guarded Pi file tools and remote shell one coherent `/app` state without placing provider credentials or the Pi process inside the task image. A timed-out or failed cell still downloads any recoverable workspace state, terminates its Sandbox, and records a normal failed `RunResult`; one failed concurrent cell does not cancel its peers.
 
 ## Conditions
 

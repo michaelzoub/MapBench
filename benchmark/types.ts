@@ -219,6 +219,32 @@ export interface GraderResult extends CheckResult {
   passed: boolean;
   details: unknown;
 }
+export type ExecutionBackendKind = "docker" | "modal";
+
+export interface ModalBackendOptions {
+  appName: string;
+  environment?: string;
+  cloud?: string;
+  region?: string;
+}
+
+export interface ExecutionBackendMetadata {
+  kind: ExecutionBackendKind;
+  runtime: "docker-engine" | "modal-sandbox";
+  runtimeVersion: string | null;
+  taskImage?: string;
+  networkMode: "no-network";
+  cpus?: number;
+  memoryMb?: number;
+  storageMb?: number;
+  gpus?: number;
+  sandboxId?: string;
+  appName?: string;
+  environment?: string;
+  cloud?: string;
+  region?: string;
+}
+
 
 export interface RunResult {
   schemaVersion: 2 | 3;
@@ -252,6 +278,7 @@ export interface RunResult {
     build: CheckResult;
   };
   artifactDirectory: string;
+  executionBackend?: ExecutionBackendMetadata;
   workspaceKept: boolean;
   isolation: {
     harness: "pi";
@@ -264,8 +291,8 @@ export interface RunResult {
     initialPiHomeFiles: string[];
     piHomeRemoved: true;
     contextFiles: "disabled";
-    resources: "explicit-extension-only" | "task-docker-limits";
-    tools: "workspace-read-only" | "workspace-read-write-docker-isolated";
+    resources: "explicit-extension-only" | "task-environment-limits";
+    tools: "workspace-read-only" | "workspace-read-write-docker-isolated" | "workspace-read-write-modal-isolated";
   };
   workspace?: string;
   error?: string;
@@ -302,6 +329,9 @@ export interface BenchmarkOptions {
   outputRoot: string;
   tasksRoot: string;
   deepSweCheckout?: string;
+  backend?: ExecutionBackendKind;
+  concurrency?: number;
+  modal?: ModalBackendOptions;
   pricingMode: "openrouter" | "off";
   pricingModel?: string;
   seed?: string;

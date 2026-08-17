@@ -1,51 +1,72 @@
 import path from "node:path";
-import type { CallGraph } from "./types.js";
+import type {
+  StructuralEdgeType,
+  StructuralIR,
+  StructuralSymbol,
+} from "./analysis/types.js";
 
 export const MERMAID_HEADER = "%% @cartograph generated";
 
 const MAX_MODULES = 24;
-const MAX_PROJECT_EDGES = 32;
+const MAX_PROJECT_RELATIONSHIPS = 32;
 const MAX_EXTERNAL_DEPENDENCIES = 6;
-const MAX_EXTERNAL_EDGES = 10;
+const MAX_EXTERNAL_RELATIONSHIPS = 10;
+const MAX_IMPORTANT_MODULES = 6;
+
+const STRUCTURAL_EDGE_LABELS: Readonly<Partial<Record<StructuralEdgeType, string>>> = {
+  import: "imports",
+  instantiate: "instantiates",
+  implement: "implements",
+  inherit: "inherits",
+  reference: "references",
+};
+const STRUCTURAL_EDGE_ORDER: StructuralEdgeType[] = [
+  "import",
+  "instantiate",
+  "implement",
+  "inherit",
+  "reference",
+];
 
 interface ModuleRecord {
   file: string;
-  callables: number;
-  types: number;
-  entry: boolean;
-  neighbors: Set<string>;
-  relationships: number;
+  declarations: number;
+  entrypoints: Set<string>;
+  reachedBy: Set<string>;
+  fanIn: Set<string>;
+  fanOut: Set<string>;
+  downstreamReach: number;
+  important: boolean;
 }
 
 interface ProjectRelationship {
   source: string;
   target: string;
-  calls: number;
-  instantiates: number;
+  structural: Set<StructuralEdgeType>;
+  flowEntrypoints: Set<string>;
 }
 
 interface ExternalRelationship {
   source: string;
   target: string;
-  uses: number;
+  types: Set<"call" | "import">;
 }
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function symbolFile(id: string): string | undefined {
-  const separator = id.lastIndexOf("#");
-  return separator > 0 ? id.slice(0, separator) : undefined;
-}
-
-function externalPackage(id: string): string {
-  const separator = id.indexOf("#");
-  return separator < 0 ? id : id.slice(0, separator);
+function isCallable(node: StructuralSymbol): boolean {
+  return node.kind === "function" || node.kind === "method" || node.kind === "constructor";
 }
 
 function relationshipKey(source: string, target: string): string {
   return `${source}\0${target}`;
+}
+
+function externalBoundary(label: string): string {
+  const separator = label.indexOf("#");
+  return separator < 0 ? label : label.slice(0, separator);
 }
 
 function mermaidText(value: string): string {
@@ -69,192 +90,324 @@ function selectImportant<T>(
     .sort((left, right) => compare(name(left), name(right)));
 }
 
-function projectEdgeLabel(edge: ProjectRelationship): string {
-  const labels: string[] = [];
-  if (edge.calls) labels.push(`${edge.calls === 1 ? "calls" : `${edge.calls} calls`}`);
-  if (edge.instantiates) labels.push(`${edge.instantiates === 1 ? "creates" : `${edge.instantiates} creates`}`);
+/** Collapse deep source trees at stable package/component boundaries. */
+function componentBoundary(file: string): string {
+  const directory = path.posix.dirname(file);
+  if (directory === ".") return ".";
+  const parts = directory.split("/");
+  if (["apps", "packages", "services"].includes(parts[0]) && parts.length > 1) {
+    return parts.slice(0, 2).join("/");
+  }
+  if (["app", "lib", "src"].includes(parts[0]) && parts.length > 1) {
+    return parts.slice(0, 2).join("/");
+  }
+  return parts.length > 2 ? parts.slice(0, 2).join("/") : directory;
+}
+
+function projectRelationshipLabel(relationship: ProjectRelationship): string {
+  const labels = STRUCTURAL_EDGE_ORDER
+    .filter((type) => relationship.structural.has(type))
+    .map((type) => STRUCTURAL_EDGE_LABELS[type]!)
+    .filter(Boolean);
+  if (relationship.flowEntrypoints.size) labels.push("execution flow");
   return labels.join(" · ");
 }
 
-/**
- * Create a bounded, deterministic module-level Mermaid view from the same call
- * graph used by the other generated architecture artifacts.
- */
-export function createArchitectureMermaid(graph: CallGraph): string {
-  const modules = new Map<string, ModuleRecord>();
-  const projectRelationships = new Map<string, ProjectRelationship>();
-  const externalRelationships = new Map<string, ExternalRelationship>();
+function downstreamCount(origin: string, outgoing: ReadonlyMap<string, Set<string>>): number {
+  const visited = new Set<string>();
+  const queue = [...(outgoing.get(origin) ?? [])].sort(compare);
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (current === origin || visited.has(current)) continue;
+    visited.add(current);
+    for (const target of [...(outgoing.get(current) ?? [])].sort(compare)) {
+      if (!visited.has(target)) queue.push(target);
+    }
+  }
+  return visited.size;
+}
 
-  const ensureModule = (file: string): ModuleRecord => {
-    const existing = modules.get(file);
+/**
+ * Create a bounded, deterministic system map directly from the canonical IR.
+ * Symbol-level calls remain exclusively available in the machine-readable call
+ * graph; this projection uses them only to trace major flow from static roots.
+ */
+export function createArchitectureMermaid(ir: StructuralIR): string {
+  const byId = new Map(ir.nodes.map((node) => [node.id, node]));
+  const moduleNodes = ir.nodes.filter((node) => node.kind === "module");
+  const moduleFiles = new Set(moduleNodes.map((node) => node.file));
+  const modules = new Map<string, ModuleRecord>();
+  for (const module of moduleNodes) {
+    modules.set(module.file, {
+      file: module.file,
+      declarations: 0,
+      entrypoints: new Set<string>(),
+      reachedBy: new Set<string>(),
+      fanIn: new Set<string>(),
+      fanOut: new Set<string>(),
+      downstreamReach: 0,
+      important: false,
+    });
+  }
+  // Be tolerant of older canonical fixtures that predate explicit module nodes.
+  for (const node of ir.nodes.filter((candidate) => candidate.kind !== "module")) {
+    if (!moduleFiles.has(node.file)) {
+      moduleFiles.add(node.file);
+      modules.set(node.file, {
+        file: node.file,
+        declarations: 0,
+        entrypoints: new Set<string>(),
+        reachedBy: new Set<string>(),
+        fanIn: new Set<string>(),
+        fanOut: new Set<string>(),
+        downstreamReach: 0,
+        important: false,
+      });
+    }
+    modules.get(node.file)!.declarations += 1;
+  }
+
+  const resolvedInternal = ir.edges.filter((edge) => {
+    if (edge.resolution !== "resolved" || !edge.target) return false;
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    return Boolean(source && target && source.file !== target.file);
+  });
+  const moduleOutgoing = new Map<string, Set<string>>();
+  for (const edge of resolvedInternal) {
+    const sourceFile = byId.get(edge.source)!.file;
+    const targetFile = byId.get(edge.target!)!.file;
+    modules.get(sourceFile)?.fanOut.add(targetFile);
+    modules.get(targetFile)?.fanIn.add(sourceFile);
+    const targets = moduleOutgoing.get(sourceFile) ?? new Set<string>();
+    targets.add(targetFile);
+    moduleOutgoing.set(sourceFile, targets);
+  }
+  for (const module of modules.values()) module.downstreamReach = downstreamCount(module.file, moduleOutgoing);
+
+  const callableIds = new Set(ir.nodes.filter(isCallable).map((node) => node.id));
+  const incomingCalls = new Set(
+    ir.edges
+      .filter((edge) => edge.type === "call" && edge.resolution === "resolved" && edge.target)
+      .map((edge) => edge.target!),
+  );
+  const executableOutgoing = new Map<string, string[]>();
+  for (const edge of ir.edges.filter((candidate) =>
+    (candidate.type === "call" || candidate.type === "instantiate") &&
+    candidate.resolution === "resolved" &&
+    candidate.target,
+  )) {
+    const targets = executableOutgoing.get(edge.source) ?? [];
+    targets.push(edge.target!);
+    executableOutgoing.set(edge.source, targets);
+  }
+  for (const targets of executableOutgoing.values()) targets.sort(compare);
+  const entrypoints = [...callableIds]
+    .filter((id) => !incomingCalls.has(id) && (executableOutgoing.get(id)?.length ?? 0) > 0)
+    .sort(compare);
+
+  const reachedBySymbol = new Map<string, Set<string>>();
+  for (const entrypoint of entrypoints) {
+    const visited = new Set<string>();
+    const queue = [entrypoint];
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const origins = reachedBySymbol.get(current) ?? new Set<string>();
+      origins.add(entrypoint);
+      reachedBySymbol.set(current, origins);
+      const node = byId.get(current);
+      if (node) modules.get(node.file)?.reachedBy.add(entrypoint);
+      for (const target of executableOutgoing.get(current) ?? []) {
+        if (!visited.has(target)) queue.push(target);
+      }
+    }
+    const root = byId.get(entrypoint);
+    if (root) modules.get(root.file)?.entrypoints.add(root.qualifiedName || root.name);
+  }
+
+  const projectRelationships = new Map<string, ProjectRelationship>();
+  const ensureProjectRelationship = (source: string, target: string): ProjectRelationship => {
+    const key = relationshipKey(source, target);
+    const existing = projectRelationships.get(key);
     if (existing) return existing;
-    const created: ModuleRecord = {
-      file,
-      callables: 0,
-      types: 0,
-      entry: false,
-      neighbors: new Set<string>(),
-      relationships: 0,
+    const created = {
+      source,
+      target,
+      structural: new Set<StructuralEdgeType>(),
+      flowEntrypoints: new Set<string>(),
     };
-    modules.set(file, created);
+    projectRelationships.set(key, created);
     return created;
   };
+  for (const edge of resolvedInternal) {
+    const source = byId.get(edge.source)!.file;
+    const target = byId.get(edge.target!)!.file;
+    const relationship = ensureProjectRelationship(source, target);
+    if (edge.type !== "call") relationship.structural.add(edge.type);
+    if (edge.type === "call") {
+      for (const entrypoint of reachedBySymbol.get(edge.source) ?? []) relationship.flowEntrypoints.add(entrypoint);
+    }
+  }
+  // Drop unreachable call-only relationships: their full detail belongs in callgraph.json.
+  for (const [key, relationship] of projectRelationships) {
+    if (!relationship.structural.size && !relationship.flowEntrypoints.size) projectRelationships.delete(key);
+  }
 
-  const addProjectRelationship = (
-    source: string,
-    target: string,
-    kind: "calls" | "instantiates",
-  ): void => {
-    if (source === target) return;
-    const key = relationshipKey(source, target);
-    const relationship = projectRelationships.get(key) ?? { source, target, calls: 0, instantiates: 0 };
-    relationship[kind] += 1;
-    projectRelationships.set(key, relationship);
-    const sourceModule = ensureModule(source);
-    const targetModule = ensureModule(target);
-    sourceModule.neighbors.add(target);
-    targetModule.neighbors.add(source);
-    sourceModule.relationships += 1;
-    targetModule.relationships += 1;
-  };
-
-  for (const id of Object.keys(graph).sort(compare)) {
-    const entry = graph[id];
-    const source = entry.file;
-    const sourceModule = ensureModule(source);
-    if (entry.kind === "function" || entry.kind === "method" || entry.kind === "constructor") {
-      sourceModule.callables += 1;
-    } else {
-      sourceModule.types += 1;
-    }
-    if (
-      entry.kind !== "function" &&
-      entry.kind !== "method" &&
-      entry.kind !== "constructor"
-    ) continue;
-    if (entry.calledBy.length === 0 && (entry.calls.length > 0 || (entry.instantiates?.length ?? 0) > 0)) {
-      sourceModule.entry = true;
-    }
-
-    for (const callee of entry.calls) {
-      const target = graph[callee]?.file;
-      if (target) addProjectRelationship(source, target, "calls");
-    }
-    for (const instantiated of entry.instantiates ?? []) {
-      const target = symbolFile(instantiated);
-      if (target) addProjectRelationship(source, target, "instantiates");
-    }
-    for (const externalCall of entry.externalCalls ?? []) {
-      const target = externalPackage(externalCall);
-      if (!target) continue;
-      const key = relationshipKey(source, target);
-      const relationship = externalRelationships.get(key) ?? { source, target, uses: 0 };
-      relationship.uses += 1;
-      externalRelationships.set(key, relationship);
-    }
+  const externalRelationships = new Map<string, ExternalRelationship>();
+  for (const edge of ir.edges.filter((candidate) => candidate.resolution === "external" && candidate.targetLabel)) {
+    if (edge.type !== "import" && edge.type !== "call") continue;
+    const source = byId.get(edge.source);
+    if (!source) continue;
+    const target = externalBoundary(edge.targetLabel!);
+    if (!target) continue;
+    const key = relationshipKey(source.file, target);
+    const relationship = externalRelationships.get(key) ?? { source: source.file, target, types: new Set<"call" | "import">() };
+    relationship.types.add(edge.type);
+    externalRelationships.set(key, relationship);
   }
 
   const allModules = [...modules.values()];
   const selectedModules = selectImportant(
     allModules,
     MAX_MODULES,
-    (module) => (module.entry && module.neighbors.size ? 150 : 0) +
-      module.neighbors.size * 100 + module.relationships * 10 + module.callables + module.types,
+    (module) =>
+      (module.entrypoints.size ? 1_000_000_000 : 0) +
+      module.reachedBy.size * 10_000_000 +
+      module.downstreamReach * 100_000 +
+      module.fanIn.size * 1_000 +
+      module.fanOut.size * 100 +
+      module.declarations,
     (module) => module.file,
   );
   const selectedFiles = new Set(selectedModules.map((module) => module.file));
 
-  const eligibleProjectEdges = [...projectRelationships.values()].filter(
-    (edge) => selectedFiles.has(edge.source) && selectedFiles.has(edge.target),
+  const importantCandidates = selectedModules.filter((module) =>
+    !module.entrypoints.size &&
+    (module.reachedBy.size > 1 || module.fanIn.size > 1 || module.fanOut.size > 1 || module.downstreamReach > 1),
   );
-  const selectedProjectEdges = selectImportant(
-    eligibleProjectEdges,
-    MAX_PROJECT_EDGES,
-    (edge) => (edge.calls + edge.instantiates) * 10 + (modules.get(edge.source)?.entry ? 1 : 0),
-    (edge) => relationshipKey(edge.source, edge.target),
+  for (const module of [...importantCandidates]
+    .sort((left, right) =>
+      right.reachedBy.size - left.reachedBy.size ||
+      right.downstreamReach - left.downstreamReach ||
+      right.fanIn.size - left.fanIn.size ||
+      right.fanOut.size - left.fanOut.size ||
+      compare(left.file, right.file),
+    )
+    .slice(0, MAX_IMPORTANT_MODULES)) module.important = true;
+
+  const eligibleProjectRelationships = [...projectRelationships.values()].filter(
+    (relationship) => selectedFiles.has(relationship.source) && selectedFiles.has(relationship.target),
+  );
+  const selectedProjectRelationships = selectImportant(
+    eligibleProjectRelationships,
+    MAX_PROJECT_RELATIONSHIPS,
+    (relationship) =>
+      (relationship.flowEntrypoints.size ? 5_000_000 + relationship.flowEntrypoints.size * 100_000 : 0) +
+      relationship.structural.size * 1_000_000 +
+      (modules.get(relationship.target)?.downstreamReach ?? 0) * 1_000 +
+      (modules.get(relationship.target)?.fanIn.size ?? 0),
+    (relationship) => relationshipKey(relationship.source, relationship.target),
   );
 
-  const eligibleExternalEdges = [...externalRelationships.values()].filter((edge) => selectedFiles.has(edge.source));
-  const packageUseCounts = new Map<string, number>();
-  for (const edge of eligibleExternalEdges) {
-    packageUseCounts.set(edge.target, (packageUseCounts.get(edge.target) ?? 0) + edge.uses);
+  const eligibleExternalRelationships = [...externalRelationships.values()].filter((edge) => selectedFiles.has(edge.source));
+  const dependencyScores = new Map<string, { modules: Set<string>; structural: boolean }>();
+  for (const edge of eligibleExternalRelationships) {
+    const score = dependencyScores.get(edge.target) ?? { modules: new Set<string>(), structural: false };
+    score.modules.add(edge.source);
+    score.structural ||= edge.types.has("import");
+    dependencyScores.set(edge.target, score);
   }
   const selectedDependencies = selectImportant(
-    [...packageUseCounts],
+    [...dependencyScores],
     MAX_EXTERNAL_DEPENDENCIES,
-    ([, uses]) => uses,
+    ([, score]) => score.modules.size * 10 + (score.structural ? 1 : 0),
     ([name]) => name,
   ).map(([name]) => name);
   const selectedDependencySet = new Set(selectedDependencies);
-  const selectedExternalEdges = selectImportant(
-    eligibleExternalEdges.filter((edge) => selectedDependencySet.has(edge.target)),
-    MAX_EXTERNAL_EDGES,
-    (edge) => edge.uses,
+  const selectedExternalRelationships = selectImportant(
+    eligibleExternalRelationships.filter((edge) => selectedDependencySet.has(edge.target)),
+    MAX_EXTERNAL_RELATIONSHIPS,
+    (edge) => (edge.types.has("import") ? 100 : 0) + (modules.get(edge.source)?.reachedBy.size ?? 0) * 10 + edge.types.size,
     (edge) => relationshipKey(edge.source, edge.target),
   );
-  const renderedDependencies = new Set(selectedExternalEdges.map((edge) => edge.target));
+  const renderedDependencies = new Set(selectedExternalRelationships.map((edge) => edge.target));
   const allDependencies = new Set([...externalRelationships.values()].map((edge) => edge.target));
 
   const moduleIds = new Map(selectedModules.map((module, index) => [module.file, `module_${index}`]));
   const dependencyIds = new Map(
     [...renderedDependencies].sort(compare).map((dependency, index) => [dependency, `dependency_${index}`]),
   );
-  const directories = new Map<string, ModuleRecord[]>();
+  const components = new Map<string, ModuleRecord[]>();
   for (const module of selectedModules) {
-    const directory = path.posix.dirname(module.file);
-    const members = directories.get(directory) ?? [];
+    const component = componentBoundary(module.file);
+    const members = components.get(component) ?? [];
     members.push(module);
-    directories.set(directory, members);
+    components.set(component, members);
   }
 
   const lines = [
     MERMAID_HEADER,
-    "%% Deterministic module-level view derived from the generated static call graph.",
+    "%% Deterministic system map projected directly from the canonical structural IR.",
+    "%% Detailed symbol call relationships remain in callgraph.json; call edges only inform entrypoint-rooted execution flow.",
     "flowchart LR",
   ];
 
   if (!selectedModules.length) {
-    lines.push('  empty["No callable modules detected"]', "");
+    lines.push('  empty["No modules detected"]', "");
     return lines.join("\n");
   }
 
-  [...directories].sort(([left], [right]) => compare(left, right)).forEach(([directory, members], index) => {
-    lines.push(`  subgraph group_${index}["${mermaidText(directory === "." ? "repository root" : directory)}"]`);
+  [...components].sort(([left], [right]) => compare(left, right)).forEach(([component, members], index) => {
+    lines.push(`  subgraph group_${index}["${mermaidText(component === "." ? "repository root" : component)}"]`);
     lines.push("    direction TB");
     for (const module of members.sort((left, right) => compare(left.file, right.file))) {
-      const details = [
-        module.callables ? `${module.callables} callable${module.callables === 1 ? "" : "s"}` : "",
-        module.types ? `${module.types} type declaration${module.types === 1 ? "" : "s"}` : "",
-        module.entry ? "entry" : "",
-      ].filter(Boolean).join(" · ") || "no declarations";
-      lines.push(`    ${moduleIds.get(module.file)}["${mermaidText(path.posix.basename(module.file))}<br/>${details}"]`);
+      const details: string[] = [];
+      if (module.entrypoints.size) {
+        const names = [...module.entrypoints].sort(compare);
+        details.push(names.length === 1 ? `static entry: ${names[0]}` : `${names.length} static entries`);
+      } else if (module.reachedBy.size) {
+        details.push(`reached by ${module.reachedBy.size} entr${module.reachedBy.size === 1 ? "y" : "ies"}`);
+      }
+      if (module.entrypoints.size || module.important) {
+        details.push(`fan ${module.fanIn.size} in / ${module.fanOut.size} out`);
+        details.push(`${module.downstreamReach} downstream`);
+      }
+      const suffix = details.length ? `<br/>${mermaidText(details.join(" · "))}` : "";
+      lines.push(`    ${moduleIds.get(module.file)}["${mermaidText(path.posix.basename(module.file))}${suffix}"]`);
     }
     lines.push("  end");
   });
 
   if (renderedDependencies.size) {
-    lines.push('  subgraph dependencies["External dependencies"]', "    direction TB");
+    lines.push('  subgraph dependencies["External systems / dependencies"]', "    direction TB");
     for (const dependency of [...renderedDependencies].sort(compare)) {
       lines.push(`    ${dependencyIds.get(dependency)}(["${mermaidText(dependency)}"])`);
     }
     lines.push("  end");
   }
 
-  for (const edge of selectedProjectEdges) {
-    const connector = edge.calls ? "-->" : "-.->";
-    lines.push(`  ${moduleIds.get(edge.source)} ${connector}|${projectEdgeLabel(edge)}| ${moduleIds.get(edge.target)}`);
+  for (const relationship of selectedProjectRelationships) {
+    const connector = relationship.flowEntrypoints.size
+      ? "==>"
+      : relationship.structural.size === 1 && relationship.structural.has("import") ? "-.->" : "-->";
+    lines.push(`  ${moduleIds.get(relationship.source)} ${connector}|${projectRelationshipLabel(relationship)}| ${moduleIds.get(relationship.target)}`);
   }
-  for (const edge of selectedExternalEdges) {
-    const label = edge.uses === 1 ? "uses" : `${edge.uses} uses`;
-    lines.push(`  ${moduleIds.get(edge.source)} -.->|${label}| ${dependencyIds.get(edge.target)}`);
+  for (const relationship of selectedExternalRelationships) {
+    const labels = [
+      relationship.types.has("import") ? "imports" : "",
+      relationship.types.has("call") ? "uses API" : "",
+    ].filter(Boolean).join(" · ");
+    lines.push(`  ${moduleIds.get(relationship.source)} -.->|${labels}| ${dependencyIds.get(relationship.target)}`);
   }
 
   const omittedModules = allModules.length - selectedModules.length;
-  const omittedProjectEdges = projectRelationships.size - selectedProjectEdges.length;
+  const omittedRelationships = projectRelationships.size - selectedProjectRelationships.length;
   const omittedDependencies = allDependencies.size - renderedDependencies.size;
   const omissionParts = [
     omittedModules ? `${omittedModules} module${omittedModules === 1 ? "" : "s"}` : "",
-    omittedProjectEdges ? `${omittedProjectEdges} internal relationship${omittedProjectEdges === 1 ? "" : "s"}` : "",
+    omittedRelationships ? `${omittedRelationships} system relationship${omittedRelationships === 1 ? "" : "s"}` : "",
     omittedDependencies ? `${omittedDependencies} external dependenc${omittedDependencies === 1 ? "y" : "ies"}` : "",
   ].filter(Boolean);
   if (omissionParts.length) {
@@ -262,12 +415,17 @@ export function createArchitectureMermaid(graph: CallGraph): string {
     lines.push("  class omitted omitted");
   }
 
-  const entries = selectedModules.filter((module) => module.entry).map((module) => moduleIds.get(module.file));
+  const entries = selectedModules.filter((module) => module.entrypoints.size).map((module) => moduleIds.get(module.file)!);
+  const important = selectedModules.filter((module) => module.important).map((module) => moduleIds.get(module.file)!);
   lines.push(
-    "  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px",
+    "  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:3px",
+    "  classDef important fill:#fef3c7,stroke:#d97706,stroke-width:2px",
+    "  classDef external fill:#f3e8ff,stroke:#7e22ce,stroke-dasharray:4 3",
     "  classDef omitted fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 4,color:#475569",
   );
   if (entries.length) lines.push(`  class ${entries.join(",")} entry`);
+  if (important.length) lines.push(`  class ${important.join(",")} important`);
+  if (dependencyIds.size) lines.push(`  class ${[...dependencyIds.values()].join(",")} external`);
   lines.push("");
   return lines.join("\n");
 }

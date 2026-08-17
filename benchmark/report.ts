@@ -372,14 +372,15 @@ interface PairedTaskDelta {
 }
 
 function pairedTaskDeltas(summary: BenchmarkSummary, metric: (run: RunResult) => number): PairedTaskDelta[] {
-  const rawByPair = new Map(summary.runs.filter((run) => run.condition === "regular-code").map((run) => [run.pairId, run]));
+  const pairKey = (run: RunResult) => `${run.taskId}\0${run.pairId}`;
+  const rawByPair = new Map(summary.runs.filter((run) => run.condition === "regular-code").map((run) => [pairKey(run), run]));
   return summary.tasks.flatMap((taskId) => summary.conditions.flatMap(({ condition }) => {
     if (condition === "regular-code") return [];
     const deltas = summary.runs
       .filter((run) => run.taskId === taskId && run.condition === condition)
       .flatMap((run) => {
-        const raw = rawByPair.get(run.pairId);
-        return raw && raw.taskId === taskId ? [metric(run) - metric(raw)] : [];
+        const raw = rawByPair.get(pairKey(run));
+        return raw ? [metric(run) - metric(raw)] : [];
       });
     return deltas.length ? [{ taskId, condition, pairs: deltas.length, delta: mean(deltas) }] : [];
   }));

@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createArchitectureSummary, generateOutline } from "../src/index.js";
+import { createArchitectureMermaid, createArchitectureSummary, generateOutline } from "../src/index.js";
 import { createStructuralIRFromDetected } from "../src/analysis/ir.js";
 import { parseProject } from "../src/analysis/parser.js";
 import { detectProject } from "../src/detection.js";
@@ -111,7 +111,7 @@ test("canonical IR carries module nodes, typed anchored edges, unresolved record
   }
 });
 
-test("every graph callable carries an exact source range and architecture derives from that graph", async () => {
+test("every graph callable carries an exact source range and human artifacts derive from canonical IR", async () => {
   const temporary = await copyFixture(path.join(languageFixtures, "polyglot"));
   try {
     const result = await generateOutline({ root: temporary.root });
@@ -128,6 +128,7 @@ test("every graph callable carries an exact source range and architecture derive
     const project = await parseProject(detected);
     const ir = createStructuralIRFromDetected(project, detected);
     assert.equal(await fs.readFile(path.join(result.out, "architecture.md"), "utf8"), createArchitectureSummary(ir));
+    assert.equal(await fs.readFile(path.join(result.out, "architecture.mmd"), "utf8"), createArchitectureMermaid(ir));
   } finally {
     await fs.rm(temporary.parent, { recursive: true, force: true });
   }

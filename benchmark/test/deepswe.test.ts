@@ -266,7 +266,7 @@ test("DeepSWE validation rejects missing, malformed, incomplete, and mismatched 
   }
 });
 
-test("DeepSWE tasks pass through the runner and capture isolated verifier results", async () => {
+test("DeepSWE tasks pass through the runner and capture isolated verifier results", { timeout: 20_000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "deepswe-runner-"));
   const previous = {
     docker: process.env.MAPBENCH_DOCKER,
@@ -305,7 +305,7 @@ test("DeepSWE tasks pass through the runner and capture isolated verifier result
       assert.equal(run.hiddenGrader.score, 1);
       assert.equal(verifierReward(run.hiddenGrader.details), 1);
       assert.equal(run.isolation.tools, "workspace-read-write-docker-isolated");
-      assert.equal(run.isolation.resources, "task-docker-limits");
+      assert.equal(run.isolation.resources, "task-environment-limits");
       const directory = path.join(completed.resultsRoot, run.artifactDirectory);
       const patch = await fs.readFile(path.join(directory, "changes.patch"), "utf8");
       assert.match(patch, new RegExp(`DeepSWE smoke instruction for ${run.taskId}`));

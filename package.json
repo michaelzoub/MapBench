@@ -26,13 +26,14 @@
     "benchmark": "bun benchmark/cli.ts",
     "benchmark:report": "bun benchmark/report-cli.ts",
     "benchmark:regrade": "bun benchmark/regrade-cli.ts",
-    "benchmark:test": "bun test ./benchmark/test/harness.test.ts ./benchmark/test/report.test.ts ./benchmark/test/deepswe.test.ts",
+    "benchmark:test": "bun test ./benchmark/test/harness.test.ts ./benchmark/test/report.test.ts ./benchmark/test/deepswe.test.ts ./benchmark/test/modal.test.ts",
     "prepack": "bun run build"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "modal": "0.9.0",
     "smol-toml": "1.8.0",
     "tree-sitter": "0.22.4",
     "tree-sitter-go": "0.23.4",

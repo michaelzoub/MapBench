@@ -33,7 +33,7 @@ All mapping views come from the canonical structural IR, but answer different qu
 | Architecture view | `.cartograph/architecture.md` | Hierarchical repository, components, public surfaces, dependencies, flows, and boundaries | Static evidence, not a runtime trace |
 | Declaration skeleton | Mirrored source paths under `.cartograph/` | Imports, classes, types, functions, signatures, and IR-derived relationship comments | Implementation bodies and ordinary control flow are removed |
 | Graph projection | `.cartograph/callgraph.json` + `query.mjs` | Callers, callees, construction, and symbol-to-symbol paths | Dynamic dispatch is recorded as unresolved or may remain absent |
-| Mermaid module map | `.cartograph/architecture.mmd` | A bounded human overview of module and dependency relationships | Aggregates the graph and intentionally omits detail |
+| Mermaid system map | `.cartograph/architecture.mmd` | Entrypoint-rooted system organization, major flows, and external boundaries | Projects canonical IR structure; detailed calls stay in the graph |
 | Agent guidance | `.cartograph/AGENTS.md` | A compact protocol for using the other artifacts | Guidance only; it contains no extra analysis |
 
 The generator detects meaningful application source, parses every supported language with its maintained Tree-sitter grammar, builds one canonical IR with typed edges and a manifest, and derives every view from it.
@@ -105,6 +105,9 @@ bun run benchmark:test
 
 # Dry-run the pinned DeepSWE smoke set through the Pi + Docker coding harness.
 bun run benchmark --deepswe ../deep-swe --task-set smoke --pricing off --dry-run
+
+# Run the same bounded set with up to four independent cells on Modal.
+bun run benchmark --deepswe ../deep-swe --task-set smoke --backend modal --concurrency 4 --pricing off
 ```
 
 Results are written to `benchmark-results/<timestamp>/` with immutable configuration, per-run answers/events/grades, summaries, an HTML report, and SVG charts. See [Benchmark methodology](docs/benchmark.md) for isolation, task authoring, the full condition matrix, pricing, regrading, and result provenance. The task catalog and manifest layout are documented in [tasks/README.md](tasks/README.md).

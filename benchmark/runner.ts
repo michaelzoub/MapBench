@@ -5,6 +5,7 @@ import path from "node:path";
 import { estimateCost, parsePiEvents } from "./events.js";
 import { loadDeepSweTasks } from "./deepswe.js";
 import { DEEPSWE_SOURCE } from "./deepswe-manifest.js";
+import { createExecutionBackend, validateExecutionBackendOptions, type AgentSandbox, type ExecutionBackend } from "./execution-backend.js";
 import { analyzeNavigation } from "./navigation.js";
 import { runCheck, runHiddenGrader, unavailableCheck } from "./grader.js";
 import { generateReport } from "./report.js";
@@ -20,15 +21,15 @@ import {
   captureChanges,
   commitBaseline,
   COMPONENTS,
-  createDockerImageWorkspace,
+
   createWorkspace,
   conditionInstructions,
   prepareCondition,
-  removeDockerWorkspace,
+
   removePrivateTaskFromWorkspace,
   resolveCommit,
   resolveTreeHash,
-  startDockerWorkspace,
+
 } from "./workspace.js";
 
 const ANSWER_PROMPT_SUFFIX = `\n\nWork only in this repository. Complete the requested task and inspect the real source as needed. This benchmark is read-only. Return only the requested answer format.`;
@@ -76,24 +77,41 @@ export function piCommand(provider: string, model: string, condition: BenchmarkO
   ];
 }
 
-export function isolatedPiEnvironment(piHome: string, queryHelper: string | null, dockerContainer?: string): NodeJS.ProcessEnv {
-  const allowed = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "SHELL", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
+export function isolatedPiEnvironment(piHome: string, queryHelper: string | null, sandboxEnvironment: NodeJS.ProcessEnv | string = {}): NodeJS.ProcessEnv {
+  const allowed = ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "SHELL", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_PROFILE"];
   const env = Object.fromEntries(allowed.flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]]])) as NodeJS.ProcessEnv;
   for (const [name, value] of Object.entries(process.env)) {
     if (value !== undefined && (/_API_KEY$|_AUTH_TOKEN$|_OAUTH_TOKEN$/.test(name) || name.startsWith("AWS_"))) env[name] = value;
   }
+  const backendEnvironment = typeof sandboxEnvironment === "string"
+    ? { MAPBENCH_DOCKER_CONTAINER: sandboxEnvironment }
+    : sandboxEnvironment;
   return {
     ...env,
     PI_CODING_AGENT_DIR: piHome,
     PI_OFFLINE: "1",
     PI_TELEMETRY: "0",
     ...(queryHelper ? { MAPBENCH_QUERY_HELPER: queryHelper } : {}),
-    ...(dockerContainer ? {
-      MAPBENCH_DOCKER_CONTAINER: dockerContainer,
-      ...(process.env.MAPBENCH_DOCKER ? { MAPBENCH_DOCKER: process.env.MAPBENCH_DOCKER } : {}),
-    } : {}),
+    ...backendEnvironment,
   };
 }
+async function copyModalProfile(piHome: { directory: string; initialFiles: string[] }): Promise<void> {
+  if (process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET) return;
+  const source = process.env.MODAL_CONFIG_PATH
+    ? path.resolve(process.env.MODAL_CONFIG_PATH)
+    : path.join(os.homedir(), ".modal.toml");
+  const stat = await fs.stat(source).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!stat) return;
+  if (!stat.isFile()) throw new Error(`Modal configuration is not a file: ${source}`);
+  const destination = path.join(piHome.directory, ".modal.toml");
+  await fs.copyFile(source, destination);
+  await fs.chmod(destination, 0o600);
+  piHome.initialFiles.push(".modal.toml");
+}
+
 function promptForTask(task: LoadedTask): string {
   const suffix = task.execution.kind === "repository-edit" ? CODE_PROMPT_SUFFIX : ANSWER_PROMPT_SUFFIX;
   return `${task.prompt}${suffix}\n`;
@@ -113,9 +131,10 @@ async function createTaskWorkspace(
   commit: string,
   label: string,
   parent: string,
+  backend: ExecutionBackend,
 ): Promise<string> {
   if (task.execution.kind === "repository-edit") {
-    return await createDockerImageWorkspace(task.execution.environment.dockerImage, commit, label, parent);
+    return await backend.materializeWorkspace(task.execution, commit, label, parent);
   }
   return await createWorkspace(options.repo, commit, label, parent);
 }
@@ -131,13 +150,14 @@ async function executeRun(
   pairId: string,
   workspaceParent: string,
   pricing: PricingResolution,
+  backend: ExecutionBackend,
 ): Promise<RunResult> {
+  const label = `${task.id}-${run}-${condition}`;
   const artifactDirectory = path.join(resultsRoot, condition, task.id, `run-${String(run).padStart(3, "0")}`);
   await fs.mkdir(artifactDirectory, { recursive: true });
-  const workspace = await createTaskWorkspace(options, task, commit, `${task.id}-${run}-${condition}`, workspaceParent);
-  const piHome = await createIsolatedPiHome(workspaceParent, `${task.id}-${run}-${condition}`);
-  if (task.execution.kind === "answer") await removePrivateTaskFromWorkspace(workspace, options.repo, options.tasksRoot);
-  await assertGraderOutsideWorkspace(workspace, task.graderDirectory);
+  let workspace = "";
+  let piHome: { directory: string; initialFiles: string[] } | undefined;
+  let sandbox: AgentSandbox | undefined;
   let baselineCommit = commit;
   let baselineTreeHash = "";
   let events = "";
@@ -148,61 +168,65 @@ async function executeRun(
   let invocation = { exitCode: null as number | null, durationMs: 0, stdoutLineElapsedMs: [] as number[], timedOut: false, stderr: "" };
   let grader: GraderResult = { ...unavailableCheck(), score: 0, maxScore: 1, passed: false, details: null };
   let checks = { regression: unavailableCheck(), typecheck: unavailableCheck(), build: unavailableCheck() };
-  let dockerContainer: string | undefined;
   try {
-    const treatment = await prepareCondition(workspace, condition, path.join(workspaceParent, "private-treatments", `${task.id}-${run}-${condition}`));
+    workspace = await createTaskWorkspace(options, task, commit, label, workspaceParent, backend);
+    piHome = await createIsolatedPiHome(workspaceParent, label);
+    if (backend.kind === "modal") await copyModalProfile(piHome);
+    if (task.execution.kind === "answer") await removePrivateTaskFromWorkspace(workspace, options.repo, options.tasksRoot);
+    await assertGraderOutsideWorkspace(workspace, task.graderDirectory);
+    const treatment = await prepareCondition(workspace, condition, path.join(workspaceParent, "private-treatments", label));
     baselineCommit = await commitBaseline(workspace);
     baselineTreeHash = await resolveTreeHash(workspace, baselineCommit);
     const finalMessageFile = path.join(artifactDirectory, "final-message.md");
     const prompt = promptForTask(task);
     const execution = task.execution;
     const workspaceMode: PiWorkspaceMode = execution.kind === "repository-edit" ? "isolated-read-write" : "read-only";
-    if (execution.kind === "repository-edit") {
-      dockerContainer = await startDockerWorkspace(
-        execution.environment.dockerImage,
-        workspace,
-        execution.environment,
-      );
-    }
+    if (execution.kind === "repository-edit") sandbox = await backend.startAgentSandbox(execution, workspace, label);
     const command = piCommand(options.provider, options.model, condition, prompt, workspaceMode);
     const invocationTimeoutMs = execution.kind === "repository-edit"
       ? Math.min(options.timeoutMs, execution.environment.timeoutMs)
       : options.timeoutMs;
-    const result = await runProcess(command, {
+    const processResult = await runProcess(command, {
       cwd: workspace,
       timeoutMs: invocationTimeoutMs,
-      env: isolatedPiEnvironment(piHome.directory, treatment.callgraphHelper, dockerContainer),
+      env: isolatedPiEnvironment(piHome.directory, treatment.callgraphHelper, sandbox?.piEnvironment),
       replaceEnv: true,
     });
-    invocation = { exitCode: result.exitCode, durationMs: result.durationMs, stdoutLineElapsedMs: result.stdoutLineElapsedMs,
-      timedOut: result.timedOut, stderr: result.stderr || result.error || "" };
-    events = result.stdout;
+    invocation = {
+      exitCode: processResult.exitCode,
+      durationMs: processResult.durationMs,
+      stdoutLineElapsedMs: processResult.stdoutLineElapsedMs,
+      timedOut: processResult.timedOut,
+      stderr: processResult.stderr || processResult.error || "",
+    };
+    events = processResult.stdout;
+    if (processResult.timedOut) await sandbox?.recoverAfterTimeout();
     const eventsFile = path.join(artifactDirectory, "events.jsonl");
     await fs.writeFile(eventsFile, events, "utf8");
-    const parsedOutput = parsePiEvents(events, result.stdoutLineElapsedMs);
-    finalResponse = parsedOutput.finalResponse;
+    finalResponse = parsePiEvents(events, processResult.stdoutLineElapsedMs).finalResponse;
     await fs.writeFile(finalMessageFile, finalResponse, "utf8");
     const changes = await captureChanges(workspace, baselineCommit);
     patch = changes.patch;
     filesChanged = changes.files;
     await fs.writeFile(path.join(artifactDirectory, "changes.patch"), patch, "utf8");
-    if (dockerContainer) {
-      await removeDockerWorkspace(dockerContainer);
-      dockerContainer = undefined;
-    }
-    grader = await runHiddenGrader(task, workspace, finalMessageFile, eventsFile, artifactDirectory);
+    await sandbox?.stop();
+    const graderEnvironment = execution.kind === "repository-edit" ? backend.graderEnvironment() : undefined;
+    grader = await runHiddenGrader(task, workspace, finalMessageFile, eventsFile, artifactDirectory, graderEnvironment);
     checks = {
-      regression: await runCheck(task.checks?.regression, workspace, task.graderDirectory),
-      typecheck: await runCheck(task.checks?.typecheck, workspace, task.graderDirectory),
-      build: await runCheck(task.checks?.build, workspace, task.graderDirectory),
+      regression: await runCheck(task.checks?.regression, workspace, task.graderDirectory, "", "", "", graderEnvironment),
+      typecheck: await runCheck(task.checks?.typecheck, workspace, task.graderDirectory, "", "", "", graderEnvironment),
+      build: await runCheck(task.checks?.build, workspace, task.graderDirectory, "", "", "", graderEnvironment),
     };
   } catch (caught) {
     error = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
+  } finally {
+    await sandbox?.stop().catch(() => undefined);
   }
-  if (dockerContainer) await removeDockerWorkspace(dockerContainer);
   const parsed = parsePiEvents(events, invocation.stdoutLineElapsedMs);
-  const usageEventFile = options.debugUsage ? "usage-events.json" : null;
-  parsed.tokens.provenance.rawEventFile = usageEventFile;
+  parsed.tokens.provenance.rawEventFile = options.debugUsage ? "usage-events.json" : null;
+  const executionBackend = task.execution.kind === "repository-edit"
+    ? (sandbox?.metadata ?? backend.metadata(task.execution))
+    : undefined;
   const result: RunResult = {
     schemaVersion: 3,
     pairId,
@@ -231,7 +255,8 @@ async function executeRun(
     hiddenGrader: grader,
     checks,
     artifactDirectory: path.relative(resultsRoot, artifactDirectory).split(path.sep).join("/"),
-    workspaceKept: options.keepWorkspaces,
+    ...(executionBackend ? { executionBackend } : {}),
+    workspaceKept: options.keepWorkspaces && Boolean(workspace),
     isolation: {
       harness: "pi",
       freshProcess: true,
@@ -240,13 +265,15 @@ async function executeRun(
       freshWorkspace: true,
       originalGitObjectsRemoved: true,
       piHome: "fresh-auth-only",
-      initialPiHomeFiles: piHome.initialFiles,
+      initialPiHomeFiles: piHome?.initialFiles ?? [],
       piHomeRemoved: true,
       contextFiles: "disabled",
-      resources: task.execution.kind === "repository-edit" ? "task-docker-limits" : "explicit-extension-only",
-      tools: task.execution.kind === "repository-edit" ? "workspace-read-write-docker-isolated" : "workspace-read-only",
+      resources: task.execution.kind === "repository-edit" ? "task-environment-limits" : "explicit-extension-only",
+      tools: task.execution.kind === "repository-edit"
+        ? backend.kind === "modal" ? "workspace-read-write-modal-isolated" : "workspace-read-write-docker-isolated"
+        : "workspace-read-only",
     },
-    ...(options.keepWorkspaces ? { workspace } : {}),
+    ...(options.keepWorkspaces && workspace ? { workspace } : {}),
     ...(error ? { error } : {}),
   };
   await Promise.all([
@@ -258,8 +285,8 @@ async function executeRun(
     writeJson(path.join(artifactDirectory, "result.json"), result),
     ...(options.debugUsage ? [writeJson(path.join(artifactDirectory, "usage-events.json"), parsed.usageEvents)] : []),
   ]);
-  if (!options.keepWorkspaces) await fs.rm(workspace, { recursive: true, force: true });
-  await fs.rm(piHome.directory, { recursive: true, force: true });
+  if (!options.keepWorkspaces && workspace) await fs.rm(workspace, { recursive: true, force: true });
+  if (piHome) await fs.rm(piHome.directory, { recursive: true, force: true });
   return result;
 }
 
@@ -272,6 +299,7 @@ export interface PlanItem {
   condition: string;
   run: number;
   workspace: string;
+  backend: "docker" | "modal";
   piCommand: string[];
   graderCommand: string[];
 }
@@ -281,12 +309,14 @@ async function validateNegativeControl(
   commit: string,
   task: LoadedTask,
   workspaceParent: string,
+  backend: ExecutionBackend,
 ): Promise<GraderResult> {
-  const workspace = await createTaskWorkspace(options, task, commit, `preflight-${task.id}`, workspaceParent);
+  let workspace = "";
   const answer = path.join(workspaceParent, `preflight-${task.id}-answer.md`);
   const events = path.join(workspaceParent, `preflight-${task.id}-events.jsonl`);
   const artifacts = path.join(workspaceParent, `preflight-${task.id}-artifacts`);
   try {
+    workspace = await createTaskWorkspace(options, task, commit, `preflight-${task.id}`, workspaceParent, backend);
     if (task.execution.kind === "answer") {
       await removePrivateTaskFromWorkspace(workspace, options.repo, options.tasksRoot);
     } else {
@@ -296,7 +326,14 @@ async function validateNegativeControl(
     await fs.mkdir(artifacts, { recursive: true });
     await fs.writeFile(path.join(artifacts, "changes.patch"), "", "utf8");
     await Promise.all([fs.writeFile(answer, "", "utf8"), fs.writeFile(events, "", "utf8")]);
-    const result = await runHiddenGrader(task, workspace, answer, events, artifacts);
+    const result = await runHiddenGrader(
+      task,
+      workspace,
+      answer,
+      events,
+      artifacts,
+      task.execution.kind === "repository-edit" ? backend.graderEnvironment() : undefined,
+    );
     const details = result.details && typeof result.details === "object" ? result.details as Record<string, unknown> : null;
     if (!details || typeof details.score !== "number" || typeof details.maxScore !== "number" || typeof details.passed !== "boolean") {
       throw new Error(`Task ${task.id} grader did not emit a JSON result for the empty-answer negative control.`);
@@ -310,24 +347,49 @@ async function validateNegativeControl(
     return result;
   } finally {
     await Promise.all([
-      fs.rm(workspace, { recursive: true, force: true }),
+      ...(workspace ? [fs.rm(workspace, { recursive: true, force: true })] : []),
       fs.rm(answer, { force: true }),
       fs.rm(events, { force: true }),
       fs.rm(artifacts, { recursive: true, force: true }),
     ]);
   }
 }
+export async function mapConcurrent<T, R>(items: T[], limit: number, execute: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  const failures: unknown[] = [];
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await execute(items[index], index);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, `${failures.length} concurrent benchmark operations failed.`);
+  return results;
+}
+
 
 export async function runBenchmark(
   options: BenchmarkOptions,
   preloadedTasks?: LoadedTask[],
+  backendOverride?: ExecutionBackend,
 ): Promise<{ resultsRoot: string; plan: PlanItem[]; runs: RunResult[]; pricing: PricingResolution }> {
   if (options.runs !== BENCHMARK_REPETITIONS) {
     throw new Error(`Benchmark repetitions are fixed at ${BENCHMARK_REPETITIONS}; received ${options.runs}.`);
   }
+  const backendConfiguration = validateExecutionBackendOptions(options);
   const deepSwe = Boolean(options.deepSweCheckout);
   if (deepSwe && options.repo) throw new Error("DeepSWE task repositories come from pinned task metadata; do not pass options.repo.");
   if (!deepSwe && !options.repo) throw new Error("A target repository is required for bundled tasks.");
+  if (!deepSwe && backendConfiguration.kind === "modal") throw new Error("Modal execution is available for DeepSWE repository-edit tasks.");
   const repo = deepSwe ? "" : path.resolve(options.repo);
   const outputRoot = path.resolve(options.outputRoot);
   const tasks = preloadedTasks ?? (options.deepSweCheckout
@@ -368,6 +430,7 @@ export async function runBenchmark(
       targetCommit: taskCommit,
       condition,
       run,
+      backend: backendConfiguration.kind,
       workspace,
       piCommand: piCommand(options.provider, options.model, condition, promptForTask(task), workspaceMode),
       graderCommand: expandCommand(
@@ -381,90 +444,116 @@ export async function runBenchmark(
     };
   });
   if (options.dryRun) return { resultsRoot, plan, runs: [], pricing };
+
   await fs.mkdir(resultsRoot, { recursive: true });
   await fs.mkdir(workspaceParent, { recursive: true });
-  const graderPreflight: Record<string, GraderResult> = {};
-  for (const task of tasks) {
-    graderPreflight[task.id] = await validateNegativeControl(
-      options,
-      targetCommitForTask(task, commit),
-      task,
-      workspaceParent,
-    );
-  }
-  await writeJson(path.join(resultsRoot, "config.json"), {
-    schemaVersion: 3,
-    createdAt: new Date().toISOString(),
-    repo: repo || null,
-    targetCommit: commit || null,
-    tasksRoot: deepSwe ? null : path.resolve(options.tasksRoot),
-    deepSwe: deepSwe ? {
-      version: tasks[0]?.execution.kind === "repository-edit" ? tasks[0].execution.sourceVersion : DEEPSWE_SOURCE.version,
-      revision: tasks[0]?.execution.kind === "repository-edit" ? tasks[0].execution.sourceRevision : DEEPSWE_SOURCE.revision,
-      checkout: path.resolve(options.deepSweCheckout!),
-    } : null,
-    tasks: tasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      prompt: task.prompt,
-      grader: task.grader,
-      checks: task.checks ?? {},
-      execution: task.execution,
-    })),
-    conditions: options.conditions,
-    conditionFactors: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_FACTORS[condition]])),
-    conditionLabels: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_LABELS[condition]])),
-    conditionComponents: Object.fromEntries(options.conditions.map((condition) => [condition, COMPONENTS[condition]])),
-    runs: options.runs,
-    aggregation: "arithmetic-mean",
-    provider: options.provider,
-    model: options.model,
-    thinking: DEFAULT_BENCHMARK_THINKING,
-    timeoutMs: options.timeoutMs,
-    seed,
-    executionOrder: plan.map(({ pairId, condition }) => ({ pairId, condition })),
-    graderPreflight,
-    workspaceRoot: options.keepWorkspaces ? workspaceParent : null,
-    pricing,
-    pi: {
-      jsonl: true,
-      ephemeral: true,
-      contextFiles: false,
-      discoveredResources: false,
-      projectTrust: false,
-      tools: deepSwe ? "workspace-confined file tools plus Docker-sandboxed bash" : "explicit workspace-confined read-only extension",
-      promptSuffix: deepSwe ? CODE_PROMPT_SUFFIX.trim() : ANSWER_PROMPT_SUFFIX.trim(),
-      debugUsage: options.debugUsage,
-      isolation: {
-        process: "new pi process per run; resume is never used",
-        session: "--no-session",
-        workspace: "sanitized exact-commit export reinitialized without the original Git object database",
-        piHome: "fresh directory containing only auth.json when file-based authentication is used",
+  let backend: ExecutionBackend | undefined;
+  try {
+    const activeBackend = backendOverride ?? await createExecutionBackend(options);
+    backend = activeBackend;
+    const preflightResults = await mapConcurrent(tasks, activeBackend.concurrency, async (task) => {
+      const result = await validateNegativeControl(
+        options,
+        targetCommitForTask(task, commit),
+        task,
+        workspaceParent,
+        activeBackend,
+      );
+      return [task.id, result] as const;
+    });
+    const graderPreflight: Record<string, GraderResult> = Object.fromEntries(preflightResults);
+    await writeJson(path.join(resultsRoot, "config.json"), {
+      schemaVersion: 3,
+      createdAt: new Date().toISOString(),
+      repo: repo || null,
+      targetCommit: commit || null,
+      tasksRoot: deepSwe ? null : path.resolve(options.tasksRoot),
+      deepSwe: deepSwe ? {
+        version: tasks[0]?.execution.kind === "repository-edit" ? tasks[0].execution.sourceVersion : DEEPSWE_SOURCE.version,
+        revision: tasks[0]?.execution.kind === "repository-edit" ? tasks[0].execution.sourceRevision : DEEPSWE_SOURCE.revision,
+        checkout: path.resolve(options.deepSweCheckout!),
+      } : null,
+      executionBackend: activeBackend.descriptor,
+      tasks: tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        prompt: task.prompt,
+        grader: task.grader,
+        checks: task.checks ?? {},
+        execution: task.execution,
+      })),
+      conditions: options.conditions,
+      conditionFactors: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_FACTORS[condition]])),
+      conditionLabels: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_LABELS[condition]])),
+      conditionComponents: Object.fromEntries(options.conditions.map((condition) => [condition, COMPONENTS[condition]])),
+      runs: options.runs,
+      aggregation: "per-task paired arithmetic mean, then equal-weight task mean",
+      pairingKey: "(taskId, repetition)",
+      provider: options.provider,
+      model: options.model,
+      thinking: DEFAULT_BENCHMARK_THINKING,
+      timeoutMs: options.timeoutMs,
+      seed,
+      executionOrder: plan.map(({ pairId, condition }) => ({ pairId, condition })),
+      graderPreflight,
+      workspaceRoot: options.keepWorkspaces ? workspaceParent : null,
+      pricing,
+      pi: {
+        jsonl: true,
+        ephemeral: true,
+        contextFiles: false,
+        discoveredResources: false,
+        projectTrust: false,
+        tools: deepSwe ? `workspace-confined file tools plus ${activeBackend.kind}-sandboxed bash` : "explicit workspace-confined read-only extension",
+        promptSuffix: deepSwe ? CODE_PROMPT_SUFFIX.trim() : ANSWER_PROMPT_SUFFIX.trim(),
+        debugUsage: options.debugUsage,
+        isolation: {
+          process: "new pi process per run; resume is never used",
+          session: "--no-session",
+          workspace: "sanitized exact-commit export reinitialized without the original Git object database",
+          piHome: "fresh directory containing only required provider auth and Modal profile credentials",
+        },
       },
-    },
-  });
-  const runs: RunResult[] = [];
-  const startingTrees = new Map<string, string>();
-  const promptHashes = new Map<string, string>();
-  for (const item of ordered) {
-    process.stdout.write(`[${runs.length + 1}/${ordered.length}] ${item.pairId} ${item.condition}\n`);
-    const result = await executeRun(options, resultsRoot, item.commit, item.task, item.condition, item.run, item.pairId, workspaceParent, pricing);
-    const cell = `${result.taskId}:${result.condition}`;
-    const priorTree = startingTrees.get(cell);
-    if (priorTree && priorTree !== result.baselineTreeHash) {
-      throw new Error(`Starting workspace drift for ${cell}: ${priorTree} != ${result.baselineTreeHash}`);
+    });
+
+    let started = 0;
+    const runs = await mapConcurrent(ordered, activeBackend.concurrency, async (item) => {
+      started += 1;
+      process.stdout.write(`[${started}/${ordered.length}] ${item.pairId} ${item.condition}\n`);
+      return await executeRun(
+        options,
+        resultsRoot,
+        item.commit,
+        item.task,
+        item.condition,
+        item.run,
+        item.pairId,
+        workspaceParent,
+        pricing,
+        activeBackend,
+      );
+    });
+    const startingTrees = new Map<string, string>();
+    const promptHashes = new Map<string, string>();
+    for (const result of runs) {
+      const cell = `${result.taskId}:${result.condition}`;
+      const priorTree = startingTrees.get(cell);
+      if (result.baselineTreeHash && priorTree && priorTree !== result.baselineTreeHash) {
+        throw new Error(`Starting workspace drift for ${cell}: ${priorTree} != ${result.baselineTreeHash}`);
+      }
+      if (result.baselineTreeHash) startingTrees.set(cell, result.baselineTreeHash);
+      const priorPrompt = promptHashes.get(result.taskId);
+      if (priorPrompt && priorPrompt !== result.promptSha256) {
+        throw new Error(`Prompt drift for ${result.taskId}: ${priorPrompt} != ${result.promptSha256}`);
+      }
+      promptHashes.set(result.taskId, result.promptSha256);
     }
-    startingTrees.set(cell, result.baselineTreeHash);
-    const priorPrompt = promptHashes.get(result.taskId);
-    if (priorPrompt && priorPrompt !== result.promptSha256) {
-      throw new Error(`Prompt drift for ${result.taskId}: ${priorPrompt} != ${result.promptSha256}`);
-    }
-    promptHashes.set(result.taskId, result.promptSha256);
-    runs.push(result);
+    const summary = buildSummary(runs);
+    await writeJson(path.join(resultsRoot, "summary.json"), summary);
+    await generateReport(resultsRoot, summary);
+    return { resultsRoot, plan, runs, pricing };
+  } finally {
+    backend?.close();
+    if (!options.keepWorkspaces) await fs.rm(workspaceParent, { recursive: true, force: true });
   }
-  const summary = buildSummary(runs);
-  await writeJson(path.join(resultsRoot, "summary.json"), summary);
-  await generateReport(resultsRoot, summary);
-  if (!options.keepWorkspaces) await fs.rm(workspaceParent, { recursive: true, force: true });
-  return { resultsRoot, plan, runs, pricing };
 }

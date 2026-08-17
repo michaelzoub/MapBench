@@ -13,10 +13,11 @@ export async function runCheck(
   answerFile = "",
   eventsFile = "",
   artifactsDirectory = "",
+  env?: NodeJS.ProcessEnv,
 ): Promise<CheckResult> {
   if (!spec) return unavailableCheck();
   const command = expandCommand(spec.command, workspace, graderDirectory, answerFile, eventsFile, artifactsDirectory);
-  const result = await runProcess(command, { cwd: workspace, timeoutMs: spec.timeoutMs ?? 300_000 });
+  const result = await runProcess(command, { cwd: workspace, timeoutMs: spec.timeoutMs ?? 300_000, env });
   return {
     status: result.timedOut ? "timeout" : result.exitCode === 0 ? "passed" : "failed",
     command,
@@ -33,8 +34,9 @@ export async function runHiddenGrader(
   answerFile = "",
   eventsFile = "",
   artifactsDirectory = "",
+  env?: NodeJS.ProcessEnv,
 ): Promise<GraderResult> {
-  const check = await runCheck(task.grader, workspace, task.graderDirectory, answerFile, eventsFile, artifactsDirectory);
+  const check = await runCheck(task.grader, workspace, task.graderDirectory, answerFile, eventsFile, artifactsDirectory, env);
   let details: unknown = null;
   let score = 0;
   let maxScore = 1;

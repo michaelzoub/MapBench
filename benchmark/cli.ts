@@ -37,6 +37,12 @@ Options:
   --provider <provider>     Fixed Pi provider (default: openai-codex)
   --model <model>           Fixed Pi model (default: gpt-5.6-terra)
                              Thinking level is fixed to low
+  --backend <kind>          Execution backend: docker or modal (default: docker)
+  --concurrency <n>         Concurrent Modal run cells, 1-32 (default: 1)
+  --modal-app <name>        Modal App name (default: mapbench)
+  --modal-environment <id>  Optional Modal Environment
+  --modal-cloud <name>      Optional Modal cloud placement
+  --modal-region <name>     Optional Modal region placement
   --pricing <mode>          Live pricing mode: openrouter or off (default: openrouter)
   --pricing-model <id>      OpenRouter author/slug when it differs from --model
   --timeout <seconds>       Pi timeout per run (default: 1800)
@@ -227,7 +233,7 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   const options: BenchmarkOptions = {
     repo: "", taskIds: [], runs: BENCHMARK_REPETITIONS, conditions: [...DEFAULT_CONDITIONS], provider: DEFAULT_BENCHMARK_PROVIDER, model: DEFAULT_BENCHMARK_MODEL, timeoutMs: 1_800_000,
     dryRun: false, keepWorkspaces: false, outputRoot: path.resolve("benchmark-results"), tasksRoot: bundledTasksRoot,
-    pricingMode: "openrouter", debugUsage: false,
+    backend: "docker", concurrency: 1, modal: { appName: "mapbench" }, pricingMode: "openrouter", debugUsage: false,
   };
   let all = false;
   let example = "";
@@ -244,7 +250,7 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
       else all = true;
       continue;
     }
-    if (!["--repo", "--example", "--deepswe", "--task", "--task-set", "--tasks", "--runs", "--conditions", "--provider", "--model", "--pricing", "--pricing-model", "--timeout", "--output", "--seed"].includes(flag)) {
+    if (!["--repo", "--example", "--deepswe", "--task", "--task-set", "--tasks", "--runs", "--conditions", "--provider", "--model", "--backend", "--concurrency", "--modal-app", "--modal-environment", "--modal-cloud", "--modal-region", "--pricing", "--pricing-model", "--timeout", "--output", "--seed"].includes(flag)) {
       throw new Error(`Unknown option: ${args[index]}`);
     }
     const [input, consumed] = value(args, index, flag);
@@ -259,6 +265,14 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
     else if (flag === "--conditions") options.conditions = parseConditionSelection(input);
     else if (flag === "--provider") options.provider = input;
     else if (flag === "--model") options.model = input;
+    else if (flag === "--backend") {
+      if (input !== "docker" && input !== "modal") throw new Error("--backend must be docker or modal.");
+      options.backend = input;
+    } else if (flag === "--concurrency") options.concurrency = Number(input);
+    else if (flag === "--modal-app") options.modal = { ...options.modal!, appName: input };
+    else if (flag === "--modal-environment") options.modal = { ...options.modal!, environment: input };
+    else if (flag === "--modal-cloud") options.modal = { ...options.modal!, cloud: input };
+    else if (flag === "--modal-region") options.modal = { ...options.modal!, region: input };
     else if (flag === "--pricing") {
       if (input !== "openrouter" && input !== "off") throw new Error("--pricing must be openrouter or off.");
       options.pricingMode = input;
@@ -298,6 +312,9 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
     } else if (all || !options.taskIds.length) options.taskIds = await listTasks(options.tasksRoot);
   }
 
+  if (options.backend === "modal" && !options.deepSweCheckout) throw new Error("--backend modal requires --deepswe.");
+  if (options.backend === "docker" && options.concurrency !== 1) throw new Error("--concurrency greater than 1 requires --backend modal.");
+  if (!Number.isInteger(options.concurrency) || options.concurrency! < 1 || options.concurrency! > 32) throw new Error("--concurrency must be an integer from 1 to 32.");
   if (options.runs !== BENCHMARK_REPETITIONS) throw new Error(`--runs must be exactly ${BENCHMARK_REPETITIONS}.`);
   const missingConditions = DEFAULT_CONDITIONS.filter((condition) => !options.conditions.includes(condition));
   if (missingConditions.length) process.stderr.write(`benchmark: warning: incomplete targeted comparison; missing conditions: ${missingConditions.join(", ")}\n`);
@@ -327,6 +344,9 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
       provider: options.provider,
       model: options.model,
       thinking: DEFAULT_BENCHMARK_THINKING,
+      backend: options.backend,
+      concurrency: options.concurrency,
+      modal: options.backend === "modal" ? options.modal : undefined,
       pricing: result.pricing,
       timeoutMs: options.timeoutMs,
       plannedResultsDirectory: result.resultsRoot,

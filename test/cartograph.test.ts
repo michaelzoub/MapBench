@@ -76,9 +76,10 @@ test("generates deterministic high-level mirrors and removes stale files", async
     const mermaid = await fs.readFile(path.join(first.out, "architecture.mmd"), "utf8");
     assert.match(mermaid, /^%% @cartograph generated\n/);
     assert.match(mermaid, /flowchart LR/);
-    assert.match(mermaid, /worker-manager\.ts<br\/>6 callables · 1 type declaration · entry/);
-    assert.match(mermaid, /module_2 -->\|calls · creates\| module_0/);
-    assert.match(mermaid, /module_2 -\.->\|uses\| dependency_0/);
+    assert.match(mermaid, /worker-manager\.ts<br\/>2 static entries · fan 0 in \/ 2 out · 2 downstream/);
+    assert.match(mermaid, /module_2 ==>\|imports · instantiates · execution flow\| module_0/);
+    assert.match(mermaid, /module_2 -\.->\|imports · uses API\| dependency_1/);
+    assert.doesNotMatch(mermaid, /\|\d+ calls?\|/);
 
     const serializedGraph = await fs.readFile(path.join(first.out, "callgraph.json"), "utf8");
     assert.match(await fs.readFile(path.join(first.out, "query.mjs"), "utf8"), /^#!\/usr\/bin\/env node\n\/\/ @cartograph generated\n/);

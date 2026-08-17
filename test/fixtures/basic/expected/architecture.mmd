@@ -1,24 +1,33 @@
 %% @cartograph generated
-%% Deterministic module-level view derived from the generated static call graph.
+%% Deterministic system map projected directly from the canonical structural IR.
+%% Detailed symbol call relationships remain in callgraph.json; call edges only inform entrypoint-rooted execution flow.
 flowchart LR
   subgraph group_0["src"]
     direction TB
-    module_1["types.ts<br/>3 type declarations"]
+    module_1["types.ts<br/>fan 2 in / 0 out · 0 downstream"]
   end
   subgraph group_1["src/storage"]
     direction TB
-    module_0["candidate-store.ts<br/>2 callables · 2 type declarations"]
+    module_0["candidate-store.ts<br/>reached by 2 entries · fan 1 in / 1 out · 1 downstream"]
   end
   subgraph group_2["src/workers"]
     direction TB
-    module_2["worker-manager.ts<br/>6 callables · 1 type declaration · entry"]
+    module_2["worker-manager.ts<br/>2 static entries · fan 0 in / 2 out · 2 downstream"]
   end
-  subgraph dependencies["External dependencies"]
+  subgraph dependencies["External systems / dependencies"]
     direction TB
-    dependency_0(["zod"])
+    dependency_0(["node:crypto"])
+    dependency_1(["zod"])
   end
-  module_2 -->|calls · creates| module_0
-  module_2 -.->|uses| dependency_0
-  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px
+  module_0 -.->|imports| module_1
+  module_2 ==>|imports · instantiates · execution flow| module_0
+  module_2 -.->|imports| module_1
+  module_2 -.->|imports| dependency_0
+  module_2 -.->|imports · uses API| dependency_1
+  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:3px
+  classDef important fill:#fef3c7,stroke:#d97706,stroke-width:2px
+  classDef external fill:#f3e8ff,stroke:#7e22ce,stroke-dasharray:4 3
   classDef omitted fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 4,color:#475569
   class module_2 entry
+  class module_0,module_1 important
+  class dependency_0,dependency_1 external

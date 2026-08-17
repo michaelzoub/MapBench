@@ -54,6 +54,35 @@ function dockerBashOperations(container: string) {
     },
   };
 }
+function modalBashOperations(sandboxId: string, root: string) {
+  return {
+    exec(command: string, _cwd: string, options: {
+      onData: (data: Buffer) => void;
+      signal?: AbortSignal;
+      timeout?: number;
+    }): Promise<{ exitCode: number | null }> {
+      const helper = process.env.MAPBENCH_MODAL_HELPER;
+      const runtime = process.env.MAPBENCH_MODAL_HELPER_RUNTIME;
+      if (!helper || !runtime) return Promise.reject(new Error("Modal shell bridge is not configured."));
+      const { promise, resolve, reject } = Promise.withResolvers<{ exitCode: number | null }>();
+      const child = spawn(runtime, [helper, "sync-exec", sandboxId, root, String(options.timeout ?? 120_000), command], {
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child.stdout.on("data", options.onData);
+      child.stderr.on("data", options.onData);
+      const stop = () => child.kill("SIGKILL");
+      options.signal?.addEventListener("abort", stop, { once: true });
+      child.once("error", reject);
+      child.once("close", (code) => {
+        options.signal?.removeEventListener("abort", stop);
+        resolve({ exitCode: code });
+      });
+      return promise;
+    },
+  };
+}
+
 
 
 const querySchema = Type.Object({
@@ -93,14 +122,15 @@ export default function mapbenchTools(pi: any) {
   pi.registerTool(safeTool(createFindTool(root), validateFind));
   pi.registerTool(safeTool(createLsTool(root), validatePath));
   const dockerContainer = process.env.MAPBENCH_DOCKER_CONTAINER;
-  if (dockerContainer) {
+  const modalSandbox = process.env.MAPBENCH_MODAL_SANDBOX_ID;
+  if (dockerContainer || modalSandbox) {
     const validateOutput = async (params: Record<string, unknown>) => {
       await assertWorkspaceOutputPath(root, typeof params.path === "string" ? params.path : ".");
     };
     pi.registerTool(safeTool(createEditTool(root), validatePath));
     pi.registerTool(safeTool(createWriteTool(root), validateOutput));
     pi.registerTool(createBashTool(root, {
-      operations: dockerBashOperations(dockerContainer),
+      operations: dockerContainer ? dockerBashOperations(dockerContainer) : modalBashOperations(modalSandbox, root),
       exposeSessionEnvironment: false,
     }));
   }

@@ -118,7 +118,15 @@ test("paired accuracy graphics use only matched regular-code pairs", () => {
     tokens: { ...full.tokens, total: 99_000 },
     hiddenGrader: { ...full.hiddenGrader, status: "failed", score: 0, passed: false },
   };
-  const graphics = renderGraphics(buildSummary([raw, full, unmatched], "2026-01-01T00:00:00.000Z"));
+  const foreignRaw: RunResult = {
+    ...raw,
+    taskId: "different-task",
+    hiddenGrader: { ...raw.hiddenGrader, status: "passed", score: 1, passed: true },
+  };
+  const summary = buildSummary([raw, foreignRaw, full, unmatched], "2026-01-01T00:00:00.000Z");
+  const fullCondition = summary.conditions.find((item) => item.condition === "all-outline-aids");
+  assert.deepEqual(fullCondition?.pairedVsRaw, { wins: 1, losses: 0, ties: 0 });
+  const graphics = renderGraphics(summary);
   assert.match(graphics["figure-5-per-task-treatment-effect.svg"], /data-condition="all-outline-aids" data-delta="1" data-pairs="1"/);
   assert.doesNotMatch(graphics["figure-5-per-task-treatment-effect.svg"], /99000/);
 });

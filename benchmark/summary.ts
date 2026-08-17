@@ -51,7 +51,8 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
     const condition = normalizeCondition(run.condition);
     return condition === run.condition ? run : { ...run, condition };
   });
-  const rawByPair = new Map(runs.filter((run) => run.condition === "regular-code").map((run) => [run.pairId, run]));
+  const pairKey = (run: RunResult) => `${run.taskId}\0${run.pairId}`;
+  const rawByPair = new Map(runs.filter((run) => run.condition === "regular-code").map((run) => [pairKey(run), run]));
   const conditionOrder = [...DEFAULT_CONDITIONS, ...CONDITIONS.filter((condition) => !DEFAULT_CONDITIONS.includes(condition))];
   const conditions: SummaryCondition[] = conditionOrder.flatMap((condition) => {
     const samples = runs.filter((run) => run.condition === condition);
@@ -59,7 +60,7 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
     const outcomes = { wins: 0, losses: 0, ties: 0 };
     if (condition !== "regular-code") {
       for (const run of samples) {
-        const raw = rawByPair.get(run.pairId);
+        const raw = rawByPair.get(pairKey(run));
         if (!raw) continue;
         const delta = normalizedScore(run) - normalizedScore(raw);
         if (delta > 1e-9) outcomes.wins += 1;

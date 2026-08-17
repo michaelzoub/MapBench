@@ -137,6 +137,17 @@ async function ensureDockerImage(image: string): Promise<void> {
   const pulled = await runProcess([executable, "pull", image], { cwd: process.cwd(), timeoutMs: 1_800_000 });
   if (pulled.exitCode !== 0) throw new Error(`Unable to pull DeepSWE environment image ${image}: ${pulled.stderr || pulled.stdout}`);
 }
+export async function sanitizeImageWorkspace(workspace: string, expectedCommit: string): Promise<void> {
+  const actual = await git(workspace, ["rev-parse", "HEAD"]);
+  if (!actual.startsWith(expectedCommit)) {
+    throw new Error(`DeepSWE environment commit mismatch: expected ${expectedCommit}, found ${actual}.`);
+  }
+  await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
+  const initialized = await runProcess(["git", "init", "--quiet"], { cwd: workspace, timeoutMs: 120_000 });
+  if (initialized.exitCode !== 0) throw new Error(`Unable to initialize sanitized DeepSWE workspace: ${initialized.stderr}`);
+  await removeManagedCartographGuidance(workspace);
+}
+
 
 export async function createDockerImageWorkspace(
   image: string,
@@ -155,14 +166,7 @@ export async function createDockerImageWorkspace(
   } finally {
     await docker(["rm", "--force", container]).catch(() => undefined);
   }
-  const actual = await git(workspace, ["rev-parse", "HEAD"]);
-  if (!actual.startsWith(expectedCommit)) {
-    throw new Error(`DeepSWE environment commit mismatch: expected ${expectedCommit}, found ${actual}.`);
-  }
-  await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
-  const initialized = await runProcess(["git", "init", "--quiet"], { cwd: workspace, timeoutMs: 120_000 });
-  if (initialized.exitCode !== 0) throw new Error(`Unable to initialize sanitized DeepSWE workspace: ${initialized.stderr}`);
-  await removeManagedCartographGuidance(workspace);
+  await sanitizeImageWorkspace(workspace, expectedCommit);
   return workspace;
 }
 

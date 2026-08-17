@@ -41,7 +41,7 @@ export async function generateOutline(options: OutlineOptions = {}): Promise<Gen
     generated.set(path.join(detected.out, file.file), createSkeleton(file, ir));
   }
   generated.set(path.join(detected.out, "architecture.md"), createArchitectureSummary(ir));
-  generated.set(path.join(detected.out, "architecture.mmd"), createArchitectureMermaid(graph));
+  generated.set(path.join(detected.out, "architecture.mmd"), createArchitectureMermaid(ir));
   generated.set(path.join(detected.out, "callgraph.json"), `${JSON.stringify(graph, null, 2)}\n`);
   generated.set(path.join(detected.out, "query.mjs"), createEmbeddedQueryScript());
   generated.set(
