@@ -82,7 +82,7 @@ async function executeRun(
   let patch = "";
   let filesChanged: string[] = [];
   let error: string | undefined;
-  let invocation = { exitCode: null as number | null, durationMs: 0, timedOut: false, stderr: "" };
+  let invocation = { exitCode: null as number | null, durationMs: 0, stdoutLineElapsedMs: [] as number[], timedOut: false, stderr: "" };
   let grader: GraderResult = { ...unavailableCheck(), score: 0, maxScore: 1, passed: false, details: null };
   let checks = { regression: unavailableCheck(), typecheck: unavailableCheck(), build: unavailableCheck() };
   try {
@@ -98,7 +98,8 @@ async function executeRun(
       env: { CODEX_HOME: codexHome.directory },
       unsetEnv: ["CODEX_THREAD_ID"],
     });
-    invocation = { exitCode: result.exitCode, durationMs: result.durationMs, timedOut: result.timedOut, stderr: result.stderr || result.error || "" };
+    invocation = { exitCode: result.exitCode, durationMs: result.durationMs, stdoutLineElapsedMs: result.stdoutLineElapsedMs,
+      timedOut: result.timedOut, stderr: result.stderr || result.error || "" };
     events = result.stdout;
     const eventsFile = path.join(artifactDirectory, "events.jsonl");
     await fs.writeFile(eventsFile, events, "utf8");
@@ -115,7 +116,7 @@ async function executeRun(
   } catch (caught) {
     error = caught instanceof Error ? caught.stack ?? caught.message : String(caught);
   }
-  const parsed = parseCodexEvents(events);
+  const parsed = parseCodexEvents(events, invocation.stdoutLineElapsedMs);
   const usageEventFile = options.debugUsage ? "usage-events.json" : null;
   parsed.tokens.provenance.rawEventFile = usageEventFile;
   const result: RunResult = {
@@ -138,6 +139,7 @@ async function executeRun(
     commandCount: parsed.commands.length,
     failedCommandCount: parsed.commands.filter((command) => command.failed).length,
     navigation: analyzeNavigation(parsed.commands),
+    editNavigation: { ...parsed.editNavigation, censoredAtMs: invocation.durationMs },
     finalResponse,
     filesChanged,
     fileCount: filesChanged.length,

@@ -11,12 +11,14 @@ export const CONDITIONS = [
 export type Condition = typeof CONDITIONS[number];
 
 // The default study compares regular code with each generated artifact in
-// isolation. Multi-artifact combinations remain available through `factorial`.
+// isolation and with the complete generated set. Intermediate multi-artifact
+// combinations remain available through `factorial`.
 export const DEFAULT_CONDITIONS: readonly Condition[] = [
   "regular-code",
   "outline-only",
   "callgraph-only",
   "skeleton-only",
+  "all-outline-aids",
 ];
 
 const LEGACY_CONDITIONS = ["raw", "full", "no-skeleton", "no-callgraph"] as const;
@@ -155,6 +157,18 @@ export interface NavigationMetrics {
   outlineUsed: boolean;
 }
 
+/**
+ * Wall-clock navigation cost before the first persisted source-code change.
+ * `elapsedMs` is unavailable for legacy traces that predate live event timing.
+ * Runs with no source edit are right-censored at the full invocation duration.
+ */
+export interface EditNavigationCost {
+  firstSourceEditObserved: boolean;
+  elapsedMs: number | null;
+  censoredAtMs: number;
+  eventLine: number | null;
+}
+
 export interface CheckResult {
   status: "passed" | "failed" | "timeout" | "unavailable";
   command: string[] | null;
@@ -191,6 +205,7 @@ export interface RunResult {
   commandCount: number;
   failedCommandCount: number;
   navigation: NavigationMetrics;
+  editNavigation?: EditNavigationCost;
   finalResponse: string;
   filesChanged: string[];
   fileCount: number;

@@ -42,7 +42,7 @@ Options:
 const ASK_HELP = `project-outline benchmark ask
 
 Interactively creates a repository-grounded private grader, validates positive and
-negative controls, and optionally runs the four targeted comparisons.
+negative controls, and optionally runs the five targeted comparisons.
 
 Usage:
   project-outline benchmark ask
@@ -62,7 +62,7 @@ Options:
   --tasks <path>            Task root (default: <cwd>/tasks)
   --run                     Start the benchmark without the final confirmation
   --no-run                  Create and validate the eval without running it
-  --dry-run                 Create the eval, then print the four-condition plan
+  --dry-run                 Create the eval, then print the five-condition plan
 `;
 
 const INIT_HELP = `project-outline benchmark init

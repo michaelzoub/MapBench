@@ -77,7 +77,7 @@ Before paid/model execution, the harness grades an empty answer and aborts if it
 | Execution path | Runtime nodes, edges, ordering, validation, and persistence effects |
 | Task-local grader | A task-specific answer or behavioral contract; it must emit `score`, `maxScore`, and `passed` |
 
-The default comparison uses three fresh runs for each of four conditions:
+The default comparison uses three fresh runs for each of five conditions:
 
 | Condition | Mapping aid available |
 |---|---|
@@ -85,14 +85,15 @@ The default comparison uses three fresh runs for each of four conditions:
 | `outline-only` | Architecture index |
 | `skeleton-only` | Declaration skeleton |
 | `callgraph-only` | Queryable call graph |
+| `all-outline-aids` | Full MapBench: all three mapping aids |
 
-Use `--conditions factorial` for all combinations, including `all-outline-aids`. The Mermaid view is for humans and is not a benchmark treatment.
+Use `--conditions factorial` for the three intermediate multi-artifact combinations as well. The Mermaid view is for humans and is not a benchmark treatment.
 
 ```bash
 # Validate task discovery and the complete plan without invoking Codex.
 bun run benchmark --repo ../my-project --task trace-cli-entrypoint --pricing off --dry-run
 
-# Run the default four-condition comparison (3 runs × 4 conditions).
+# Run the default five-condition comparison (3 runs × 5 conditions).
 bun run benchmark --repo ../my-project --task trace-cli-entrypoint
 
 # Create a repository-grounded localization task and private grader.

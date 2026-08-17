@@ -1,4 +1,4 @@
-import type { CommandRecord, Pricing, TokenUsage } from "./types.js";
+import type { CommandRecord, EditNavigationCost, Pricing, TokenUsage } from "./types.js";
 import { accessedPaths, navigationKind, readRanges } from "./navigation.js";
 
 const finiteNumber = (value: unknown): number | null =>
@@ -50,15 +50,42 @@ function commandFrom(item: Record<string, unknown>): CommandRecord | undefined {
   };
 }
 
-export function parseCodexEvents(contents: string): {
+const SOURCE_CODE_PATH = /\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|mjs|cjs|kt|kts|php|py|rb|rs|scala|sol|swift|ts|tsx|vue|svelte)$/i;
+const SOURCE_CODE_TOKEN = /(?:\.?\.?\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|mjs|cjs|kt|kts|php|py|rb|rs|scala|sol|swift|ts|tsx|vue|svelte)/gi;
+
+function sourceEditPaths(event: Record<string, unknown>): string[] {
+  const payload = (event.item && typeof event.item === "object" ? event.item : event) as Record<string, unknown>;
+  const type = String(payload.type ?? event.type ?? "");
+  const paths: string[] = [];
+  const changes = payload.changes;
+  if (/file.*change|change.*file/i.test(type) && Array.isArray(changes)) {
+    for (const change of changes) {
+      if (!change || typeof change !== "object") continue;
+      const item = change as Record<string, unknown>;
+      const candidate = item.path ?? item.file ?? item.file_path;
+      if (typeof candidate === "string") paths.push(candidate);
+    }
+  }
+  const command = Array.isArray(payload.command)
+    ? payload.command.map(String).join(" ")
+    : String(payload.command ?? payload.cmd ?? "");
+  const mutates = /\bapply_patch\b|\bpatch\s+-p\d|\b(?:sed|perl)\b[^\n]*(?:\s-i\b|--in-place)|(?:^|[;&|]\s*)tee\s|(?:^|[^<])>{1,2}\s*[^&]/i.test(command);
+  if (mutates) paths.push(...accessedPaths(command), ...(command.match(SOURCE_CODE_TOKEN) ?? []));
+  return [...new Set(paths.map((value) => value.replace(/^\.\//, "")))]
+    .filter((value) => !value.startsWith(".project-outline/") && !value.includes("/.project-outline/") && SOURCE_CODE_PATH.test(value));
+}
+
+export function parseCodexEvents(contents: string, stdoutLineElapsedMs: number[] = []): {
   tokens: TokenUsage;
   usageEvents: RawUsageEvent[];
   commands: CommandRecord[];
+  editNavigation: Omit<EditNavigationCost, "censoredAtMs">;
   errors: string[];
 } {
   const commands: CommandRecord[] = [];
   const errors: string[] = [];
   const usageEvents: RawUsageEvent[] = [];
+  let firstSourceEditLine: number | null = null;
   const lines = contents.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -72,6 +99,7 @@ export function parseCodexEvents(contents: string): {
     if (type === "item.completed" || (!type.includes("started") && !type.includes("delta"))) {
       const command = commandFrom(event);
       if (command) commands.push(command);
+      if (firstSourceEditLine === null && sourceEditPaths(event).length > 0) firstSourceEditLine = index + 1;
     }
     if (type.includes("error")) errors.push(String(event.message ?? event.error ?? type));
   }
@@ -108,7 +136,17 @@ export function parseCodexEvents(contents: string): {
       },
     },
   };
-  return { tokens, usageEvents, commands, errors };
+  return {
+    tokens,
+    usageEvents,
+    commands,
+    editNavigation: {
+      firstSourceEditObserved: firstSourceEditLine !== null,
+      elapsedMs: firstSourceEditLine === null ? null : stdoutLineElapsedMs[firstSourceEditLine - 1] ?? null,
+      eventLine: firstSourceEditLine,
+    },
+    errors,
+  };
 }
 
 export function estimateCost(tokens: TokenUsage, pricing: Pricing | undefined): number | null {

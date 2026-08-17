@@ -119,19 +119,21 @@ test("conditions form the complete three-factor artifact matrix", () => {
   assert.deepEqual(new Set(signatures), new Set(Array.from({ length: 8 }, (_, value) => value.toString(2).padStart(3, "0"))));
 });
 
-test("default conditions compare regular code with each single artifact", () => {
+test("default conditions compare regular code with each single artifact and Full MapBench", () => {
   assert.deepEqual(DEFAULT_CONDITIONS, [
     "regular-code",
     "outline-only",
     "callgraph-only",
     "skeleton-only",
+    "all-outline-aids",
   ]);
-  assert.equal(new Set(DEFAULT_CONDITIONS).size, 4);
-  for (const condition of DEFAULT_CONDITIONS) {
+  assert.equal(new Set(DEFAULT_CONDITIONS).size, 5);
+  for (const condition of DEFAULT_CONDITIONS.filter((item) => item !== "all-outline-aids")) {
     const factors = CONDITION_FACTORS[condition];
     const artifactCount = Number(factors.outline) + Number(factors.skeleton) + Number(factors.callgraph);
     assert.ok(artifactCount <= 1, `${condition} unexpectedly combines generated artifacts`);
   }
+  assert.deepEqual(CONDITION_FACTORS["all-outline-aids"], { outline: true, skeleton: true, callgraph: true });
 });
 
 test("condition presets select targeted defaults or the optional factorial", () => {
@@ -289,6 +291,33 @@ test("Codex JSONL parsing accounts for tokens, reasoning, commands, and failures
   assert.equal(parsed.commands.length, 2);
   assert.equal(parsed.commands.filter((command) => command.failed).length, 1);
   assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 10, cachedInputPerMillion: 2, outputPerMillion: 20 }), 0.00128);
+});
+
+test("Codex JSONL parsing records exact wall time to the first source-code edit", () => {
+  const input = [
+    { type: "item.completed", item: { type: "command_execution", command: "sed -n '1,80p' src/main.ts", status: "completed", exit_code: 0 } },
+    { type: "item.completed", item: { type: "file_change", changes: [{ path: ".project-outline/src/main.ts", kind: "update" }] } },
+    { type: "item.completed", item: { type: "file_change", changes: [{ path: "src/main.ts", kind: "update" }] } },
+    { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } },
+  ].map((event) => JSON.stringify(event)).join("\n");
+  const parsed = parseCodexEvents(input, [45, 300, 725, 900]);
+  assert.deepEqual(parsed.editNavigation, {
+    firstSourceEditObserved: true,
+    elapsedMs: 725,
+    eventLine: 3,
+  });
+});
+
+test("source-edit timing recognizes mutating shell commands for root-level source files", () => {
+  const input = JSON.stringify({
+    type: "item.completed",
+    item: { type: "command_execution", command: "sed -i.bak 's/old/new/' main.go", status: "completed", exit_code: 0 },
+  });
+  assert.deepEqual(parseCodexEvents(input, [180]).editNavigation, {
+    firstSourceEditObserved: true,
+    elapsedMs: 180,
+    eventLine: 1,
+  });
 });
 
 test("token parsing derives only exact totals and leaves unavailable Codex fields null", () => {

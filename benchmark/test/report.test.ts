@@ -21,6 +21,7 @@ const run: RunResult = {
   status: "failed", exitCode: 1, durationMs: 1200, tokens,
   estimatedCostUsd: null, commands: [], commandCount: 0, failedCommandCount: 0, finalResponse: "", filesChanged: [], fileCount: 0,
   navigation: emptyNavigationMetrics(),
+  editNavigation: { firstSourceEditObserved: false, elapsedMs: null, censoredAtMs: 1200, eventLine: null },
   hiddenGrader: { ...check, status: "failed", score: 0, maxScore: 1, passed: false,
     details: { metrics: { nodeRecall: 0.5, sourceLinesRetrieved: 12 } } }, checks: { regression: check, typecheck: check, build: check },
   artifactDirectory: "regular-code/task/run-001", workspaceKept: false,
@@ -35,10 +36,11 @@ test("report generation is deterministic, self-contained, and emits every requir
     const summary = buildSummary([run, outlineRun], "2026-01-01T00:00:00.000Z");
     const graphics = renderGraphics(summary);
     assert.deepEqual(Object.keys(graphics).sort(), [
-      "condition-design.svg", "duration.svg", "estimated-cost.svg", "hidden-test-score.svg",
-      "paired-outcomes.svg", "task-duplicate-source-reads.svg", "task-duration.svg", "task-heatmap.svg",
-      "task-hidden-test-score.svg", "task-score-delta-vs-regular-code.svg", "task-total-tokens.svg",
-      "token-breakdown.svg", "total-tokens.svg",
+      "figure-1-main-performance.svg",
+      "figure-2-task-condition-heatmap.svg",
+      "figure-3-efficiency-frontiers.svg",
+      "figure-4-navigation-cost.svg",
+      "figure-5-per-task-treatment-effect.svg",
     ]);
     const first = path.join(root, "first");
     const second = path.join(root, "second");
@@ -59,20 +61,20 @@ test("report generation is deterministic, self-contained, and emits every requir
     assert.match(html, /not an observed bill/);
     assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/);
     const markdown = await fs.readFile(path.join(first, "summary.md"), "utf8");
-    assert.match(markdown, /graphics\/condition-design\.svg/);
+    assert.match(markdown, /graphics\/figure-1-main-performance\.svg/);
     assert.doesNotMatch(markdown, /graphics\/commands-executed\.svg/);
-    assert.match(markdown, /graphics\/task-hidden-test-score\.svg/);
+    assert.match(markdown, /graphics\/figure-5-per-task-treatment-effect\.svg/);
     assert.match(markdown, /## Task-by-task arithmetic means/);
     assert.match(markdown, /sourceLinesRetrieved=12/);
-    assert.match(graphics["task-hidden-test-score.svg"], /<rect/);
-    assert.match(graphics["task-hidden-test-score.svg"], />task</);
-    assert.doesNotMatch(graphics["task-hidden-test-score.svg"], />Raw|>Full</);
-    assert.match(graphics["task-hidden-test-score.svg"], /Regular code/);
-    assert.match(graphics["task-hidden-test-score.svg"], /CONDITION LEGEND/);
-    assert.match(graphics["task-hidden-test-score.svg"], /Architecture map.*one system-level index/);
-    assert.doesNotMatch(graphics["condition-design.svg"], /AGENTS\.md|guidance/i);
-    assert.doesNotMatch(graphics["total-tokens.svg"], /<circle/);
-    assert.doesNotMatch(graphics["total-tokens.svg"], /dots show/);
+    assert.match(graphics["figure-1-main-performance.svg"], /95% Wilson/);
+    assert.match(graphics["figure-2-task-condition-heatmap.svg"], /data-task="task"/);
+    assert.match(graphics["figure-2-task-condition-heatmap.svg"], /data-successes="0" data-samples="1"/);
+    assert.match(graphics["figure-3-efficiency-frontiers.svg"], /\(a\) Mean total tokens/);
+    assert.match(graphics["figure-3-efficiency-frontiers.svg"], /\(b\) Mean runtime \(seconds\)/);
+    assert.match(graphics["figure-4-navigation-cost.svg"], /right-censored/);
+    assert.match(graphics["figure-5-per-task-treatment-effect.svg"], /no matched Full pairs/);
+    assert.doesNotMatch(Object.values(graphics).join("\n"), /source bytes|source KB|Output KB|Cumulative KB/i);
+    assert.doesNotMatch(html, /Output KB|Cumulative KB/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -101,6 +103,6 @@ test("paired accuracy graphics use only matched regular-code pairs", () => {
     hiddenGrader: { ...full.hiddenGrader, status: "failed", score: 0, passed: false },
   };
   const graphics = renderGraphics(buildSummary([raw, full, unmatched], "2026-01-01T00:00:00.000Z"));
-  assert.match(graphics["task-score-delta-vs-regular-code.svg"], /data-condition="all-outline-aids" data-delta="1" data-pairs="1"/);
-  assert.doesNotMatch(graphics["task-score-delta-vs-regular-code.svg"], /99000/);
+  assert.match(graphics["figure-5-per-task-treatment-effect.svg"], /data-condition="all-outline-aids" data-delta="1" data-pairs="1"/);
+  assert.doesNotMatch(graphics["figure-5-per-task-treatment-effect.svg"], /99000/);
 });

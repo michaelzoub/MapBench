@@ -20,7 +20,7 @@ Node.js 20+, Bun, and an authenticated `codex` CLI are required.
 # Inspect task/condition discovery and command plans without model execution.
 bun run benchmark --repo ../target --task map-project --pricing off --dry-run
 
-# Run the default four conditions, three fresh repetitions each.
+# Run the default five conditions, three fresh repetitions each.
 bun run benchmark --repo ../target --task map-project
 
 # Run all bundled tasks against a compatible target.
@@ -68,9 +68,9 @@ The three treatment factors are architecture index, declaration skeleton, and qu
 | `outline-skeleton` | Architecture + skeleton | — | ✓ | ✓ | — |
 | `outline-callgraph` | Architecture + call graph | — | ✓ | — | ✓ |
 | `skeleton-callgraph` | Skeleton + call graph | — | — | ✓ | ✓ |
-| `all-outline-aids` | All three artifacts | — | ✓ | ✓ | ✓ |
+| `all-outline-aids` | Full MapBench (all three artifacts) | ✓ | ✓ | ✓ | ✓ |
 
-`targeted` selects the four default rows; `factorial` selects all eight. Generated conditions receive a neutral managed root `AGENTS.md` section that names available paths but supplies no navigation strategy. The generated `.project-outline/AGENTS.md` protocol and human Mermaid diagram are removed so they do not become extra treatment factors.
+`targeted` selects the five default rows: baseline, each artifact in isolation, and Full MapBench. `factorial` selects all eight. Generated conditions receive a neutral managed root `AGENTS.md` section that names available paths but supplies no navigation strategy. The generated `.project-outline/AGENTS.md` protocol and human Mermaid diagram are removed so they do not become extra treatment factors.
 
 ## How task grading works
 
@@ -135,7 +135,11 @@ config.json          immutable commit, task, condition, model, isolation, and pr
 summary.json         machine-readable aggregate and all run records
 summary.md           concise text summary
 report.html          self-contained report
-graphics/*.svg       standalone charts
+graphics/figure-1-main-performance.svg
+graphics/figure-2-task-condition-heatmap.svg
+graphics/figure-3-efficiency-frontiers.svg
+graphics/figure-4-navigation-cost.svg
+graphics/figure-5-per-task-treatment-effect.svg
 <condition>/<task>/run-*/
   events.jsonl
   stderr.log
@@ -147,7 +151,19 @@ graphics/*.svg       standalone charts
 
 Failed and timed-out runs remain in the sample. Every aggregate uses the arithmetic mean of the three raw repetitions. Pair IDs support condition wins/losses/ties without discarding unmatched failures.
 
-Navigation telemetry comes from actual command records. It distinguishes successful outline access, real-source access, mixed commands, failed navigation, command output bytes, unique files, and repeated `sed` source ranges. It is diagnostic context, not the factual task score.
+### Publication figures
+
+The report emits a fixed five-figure set directly from `summary.runs`:
+
+1. condition pass rates with 95% Wilson binomial intervals;
+2. task × condition cells labeled with passes/repetitions;
+3. pass rate against mean total tokens and mean runtime, with non-dominated frontiers;
+4. per-run wall time to the first source edit, retaining no-edit runs as right-censored observations; and
+5. per-task paired pass-rate effects for Full MapBench minus baseline.
+
+Pass-rate figures use `hiddenGrader.passed`, never partial normalized grader scores. The paired effect uses only matching task/repetition `pairId` values. Token counts come from authoritative Codex usage events, and no source-size or source-byte proxy appears in the figure set.
+
+Navigation telemetry comes from actual command and file-change events. The report uses elapsed wall-clock time to the first persisted source-code edit; runs without an edit are right-censored at the invocation duration. Live event arrival times are persisted for new runs, while legacy edited traces without timing remain unavailable rather than being estimated. This telemetry is diagnostic context, not the factual task score.
 
 Token fields come only from Codex `turn.completed` usage events. Cached input is part of total input and is never double-counted. Unreported output/reasoning fields remain unavailable instead of being estimated from characters.
 

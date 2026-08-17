@@ -6,6 +6,8 @@ export interface ProcessResult {
   stdout: string;
   stderr: string;
   durationMs: number;
+  /** Elapsed wall time when each complete stdout line was observed. */
+  stdoutLineElapsedMs: number[];
   timedOut: boolean;
   error?: string;
 }
@@ -28,6 +30,8 @@ export async function runProcess(
     let stderr = "";
     let timedOut = false;
     let settled = false;
+    let stdoutLineBuffer = "";
+    const stdoutLineElapsedMs: number[] = [];
     let timer: NodeJS.Timeout;
     const childEnv = { ...process.env, ...options.env };
     for (const name of options.unsetEnv ?? []) delete childEnv[name];
@@ -41,11 +45,23 @@ export async function runProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ command, exitCode, stdout, stderr, durationMs: Math.round(performance.now() - started), timedOut, error });
+      const durationMs = Math.round(performance.now() - started);
+      if (stdoutLineBuffer.length > 0) {
+        stdoutLineElapsedMs.push(durationMs);
+        stdoutLineBuffer = "";
+      }
+      resolve({ command, exitCode, stdout, stderr, durationMs, stdoutLineElapsedMs, timedOut, error });
     };
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       stdout += text;
+      stdoutLineBuffer += text;
+      let newline = stdoutLineBuffer.indexOf("\n");
+      while (newline >= 0) {
+        stdoutLineElapsedMs.push(Math.round(performance.now() - started));
+        stdoutLineBuffer = stdoutLineBuffer.slice(newline + 1);
+        newline = stdoutLineBuffer.indexOf("\n");
+      }
       options.onStdout?.(text);
     });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
