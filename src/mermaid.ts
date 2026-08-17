@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { CallGraph } from "./types.js";
 
-export const MERMAID_HEADER = "%% @project-outline generated";
+export const MERMAID_HEADER = "%% @cartograph generated";
 
 const MAX_MODULES = 24;
 const MAX_PROJECT_EDGES = 32;
@@ -10,7 +10,8 @@ const MAX_EXTERNAL_EDGES = 10;
 
 interface ModuleRecord {
   file: string;
-  symbols: number;
+  callables: number;
+  types: number;
   entry: boolean;
   neighbors: Set<string>;
   relationships: number;
@@ -89,7 +90,8 @@ export function createArchitectureMermaid(graph: CallGraph): string {
     if (existing) return existing;
     const created: ModuleRecord = {
       file,
-      symbols: 0,
+      callables: 0,
+      types: 0,
       entry: false,
       neighbors: new Set<string>(),
       relationships: 0,
@@ -120,7 +122,16 @@ export function createArchitectureMermaid(graph: CallGraph): string {
     const entry = graph[id];
     const source = entry.file;
     const sourceModule = ensureModule(source);
-    sourceModule.symbols += 1;
+    if (entry.kind === "function" || entry.kind === "method" || entry.kind === "constructor") {
+      sourceModule.callables += 1;
+    } else {
+      sourceModule.types += 1;
+    }
+    if (
+      entry.kind !== "function" &&
+      entry.kind !== "method" &&
+      entry.kind !== "constructor"
+    ) continue;
     if (entry.calledBy.length === 0 && (entry.calls.length > 0 || (entry.instantiates?.length ?? 0) > 0)) {
       sourceModule.entry = true;
     }
@@ -148,7 +159,7 @@ export function createArchitectureMermaid(graph: CallGraph): string {
     allModules,
     MAX_MODULES,
     (module) => (module.entry && module.neighbors.size ? 150 : 0) +
-      module.neighbors.size * 100 + module.relationships * 10 + module.symbols,
+      module.neighbors.size * 100 + module.relationships * 10 + module.callables + module.types,
     (module) => module.file,
   );
   const selectedFiles = new Set(selectedModules.map((module) => module.file));
@@ -211,9 +222,11 @@ export function createArchitectureMermaid(graph: CallGraph): string {
     lines.push(`  subgraph group_${index}["${mermaidText(directory === "." ? "repository root" : directory)}"]`);
     lines.push("    direction TB");
     for (const module of members.sort((left, right) => compare(left.file, right.file))) {
-      const details = module.symbols === 0
-        ? "type target"
-        : `${module.symbols} callable${module.symbols === 1 ? "" : "s"}${module.entry ? " · entry" : ""}`;
+      const details = [
+        module.callables ? `${module.callables} callable${module.callables === 1 ? "" : "s"}` : "",
+        module.types ? `${module.types} type declaration${module.types === 1 ? "" : "s"}` : "",
+        module.entry ? "entry" : "",
+      ].filter(Boolean).join(" · ") || "no declarations";
       lines.push(`    ${moduleIds.get(module.file)}["${mermaidText(path.posix.basename(module.file))}<br/>${details}"]`);
     }
     lines.push("  end");

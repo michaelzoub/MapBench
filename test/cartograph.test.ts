@@ -30,7 +30,7 @@ async function relativeFiles(root: string): Promise<string[]> {
 }
 
 test("generates deterministic high-level mirrors and removes stale files", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "repo-outline-test-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-test-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.cp(fixtureRoot, repository, { recursive: true });
   await fs.mkdir(path.join(repository, "tasks", "private-task", "grader"), { recursive: true });
@@ -55,8 +55,8 @@ test("generates deterministic high-level mirrors and removes stale files", async
     assert.equal((await relativeFiles(first.out)).some((file) => file.startsWith("tasks/")), false);
 
     const instructions = await fs.readFile(path.join(first.out, "AGENTS.md"), "utf8");
-    assert.match(instructions, /^<!-- @project-outline generated -->/);
-    assert.match(instructions, /project-outline query/);
+    assert.match(instructions, /^<!-- @cartograph generated -->/);
+    assert.match(instructions, /cartograph query/);
     assert.match(instructions, /query find/);
     assert.match(instructions, /query inspect/);
     assert.match(instructions, /query explore/);
@@ -64,21 +64,24 @@ test("generates deterministic high-level mirrors and removes stale files", async
     assert.match(instructions, /single smallest artifact/);
     assert.match(instructions, /Never dump `callgraph\.json`/);
     assert.doesNotMatch(instructions, /architecture\.md` first/);
-    assert.match(instructions, /project-outline generate/);
+    assert.match(instructions, /cartograph generate/);
 
     const architecture = await fs.readFile(path.join(first.out, "architecture.md"), "utf8");
     assert.match(architecture, /# Architecture Index/);
-    assert.match(architecture, /`src\/workers\/worker-manager\.ts#bootstrap` → `src\/workers\/worker-manager\.ts#createWorker`/);
+    assert.match(architecture, /`src\/workers\/worker-manager\.ts#bootstrap`/);
+    assert.match(architecture, /`src\/types\.ts` — 3 type declarations/);
+    assert.match(architecture, /## Important execution flows/);
+    assert.match(architecture, /## Static Call Roots/);
 
     const mermaid = await fs.readFile(path.join(first.out, "architecture.mmd"), "utf8");
-    assert.match(mermaid, /^%% @project-outline generated\n/);
+    assert.match(mermaid, /^%% @cartograph generated\n/);
     assert.match(mermaid, /flowchart LR/);
-    assert.match(mermaid, /worker-manager\.ts<br\/>6 callables · entry/);
-    assert.match(mermaid, /module_1 -->\|calls · creates\| module_0/);
-    assert.match(mermaid, /module_1 -\.->\|uses\| dependency_0/);
+    assert.match(mermaid, /worker-manager\.ts<br\/>6 callables · 1 type declaration · entry/);
+    assert.match(mermaid, /module_2 -->\|calls · creates\| module_0/);
+    assert.match(mermaid, /module_2 -\.->\|uses\| dependency_0/);
 
     const serializedGraph = await fs.readFile(path.join(first.out, "callgraph.json"), "utf8");
-    assert.match(await fs.readFile(path.join(first.out, "query.mjs"), "utf8"), /^#!\/usr\/bin\/env node\n\/\/ @project-outline generated\n/);
+    assert.match(await fs.readFile(path.join(first.out, "query.mjs"), "utf8"), /^#!\/usr\/bin\/env node\n\/\/ @cartograph generated\n/);
     const graph = JSON.parse(serializedGraph);
     const processId = "src/workers/worker-manager.ts#WorkerManager.process";
     const findId = "src/storage/candidate-store.ts#CandidateStore.find";
@@ -159,7 +162,7 @@ test("generates deterministic high-level mirrors and removes stale files", async
 });
 
 test("resolves native callers, callees, and construction while preserving dynamic calls", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-graph-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-graph-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.mkdir(path.join(repository, "src"), { recursive: true });
   await fs.writeFile(path.join(repository, "package.json"), '{"type":"module"}\n');
@@ -233,15 +236,25 @@ export function resumeResearchCommand(agent: ResearchAgent): Promise<string> {
       instantiates: ["src/context.ts#RunContext"],
       unresolvedProjectCalls: ["this.toolRegistry.execute"],
     });
+    assert.equal(graph["src/context.ts#RunContext"].kind, "class");
+    assert.equal(graph["src/context.ts#RunContext"].signature, "class RunContext");
+    const inspectedType = await navigateOutline({ operation: "inspect", query: "RunContext" }, { root: repository });
+    assert.equal(inspectedType.operation, "inspect");
+    assert.equal(inspectedType.resolution, "exact");
+    assert.equal(inspectedType.symbol?.id, "src/context.ts#RunContext");
+    assert.equal(inspectedType.symbol?.kind, "class");
+    assert.deepEqual(inspectedType.symbol?.callees, []);
+    assert.deepEqual(inspectedType.symbol?.callers, []);
     const outline = await fs.readFile(path.join(result.out, "src/research.ts"), "utf8");
-    assert.match(outline, /"Calls: src\/research\.ts#ResearchAgent\.plan, src\/research\.ts#ResearchAgent\.delegate, src\/research\.ts#ResearchAgent\.evaluate; Instantiates: src\/context\.ts#RunContext; Unresolved project: this\.toolRegistry\.execute"/);
+    assert.match(outline, /\/\/ Structural relationships:\n\s*\/\/ call:\n\s*\/\/\s+src\/research\.ts#ResearchAgent\.plan/);
+    assert.doesNotMatch(outline, /"Calls:/);
   } finally {
     await fs.rm(temporaryParent, { recursive: true, force: true });
   }
 });
 
 test("promotes statically supplied callbacks into navigable call edges", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-callbacks-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-callbacks-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.mkdir(path.join(repository, "src"), { recursive: true });
   await fs.writeFile(path.join(repository, "package.json"), '{"type":"module"}\n');
@@ -276,7 +289,7 @@ export function run(): void {
 });
 
 test("keeps same-named symbols stable and makes short queries explicitly ambiguous", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-symbol-ids-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-symbol-ids-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.mkdir(path.join(repository, "src"), { recursive: true });
   await fs.writeFile(path.join(repository, "package.json"), '{"type":"module"}\n');
@@ -320,7 +333,7 @@ export function start(): void { runAlpha(); runBeta(); }
 });
 
 test("init creates and idempotently updates only its managed AGENTS.md section", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-init-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-init-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.mkdir(repository);
 
@@ -329,8 +342,8 @@ test("init creates and idempotently updates only its managed AGENTS.md section",
     assert.equal(created.created, true);
     assert.equal(created.changed, true);
     const initial = await fs.readFile(created.agentsFile, "utf8");
-    assert.match(initial, /<!-- project-outline:start -->/);
-    assert.match(initial, /project-outline query/);
+    assert.match(initial, /<!-- cartograph:start -->/);
+    assert.match(initial, /cartograph query/);
     assert.match(initial, /Use one smallest-fit aid first/);
     assert.doesNotMatch(initial, /architecture\.md` first/);
 
@@ -349,14 +362,14 @@ test("init creates and idempotently updates only its managed AGENTS.md section",
     assert.match(final, /Final user note\./);
     assert.match(final, /\.agent-map\/query\.mjs/);
     assert.doesNotMatch(final, /\.agent-map\/AGENTS\.md/);
-    assert.equal((final.match(/<!-- project-outline:start -->/g) ?? []).length, 1);
+    assert.equal((final.match(/<!-- cartograph:start -->/g) ?? []).length, 1);
   } finally {
     await fs.rm(temporaryParent, { recursive: true, force: true });
   }
 });
 
 test("generate never modifies a root AGENTS.md", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-boundary-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-boundary-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.cp(fixtureRoot, repository, { recursive: true });
   const agentsFile = path.join(repository, "AGENTS.md");
@@ -377,12 +390,12 @@ test("refuses output paths that could modify the source repository", async () =>
 });
 
 test("refuses output symlinks that could escape the repository", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-symlink-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-symlink-"));
   const repository = path.join(temporaryParent, "repository");
   const outside = path.join(temporaryParent, "outside");
   await fs.cp(fixtureRoot, repository, { recursive: true });
   await fs.mkdir(outside);
-  await fs.symlink(outside, path.join(repository, ".project-outline"), "dir");
+  await fs.symlink(outside, path.join(repository, ".cartograph"), "dir");
 
   try {
     await assert.rejects(generateOutline({ root: repository }), /must not contain symbolic links/);
@@ -393,7 +406,7 @@ test("refuses output symlinks that could escape the repository", async () => {
 });
 
 test("watch regenerates after source changes", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "repo-outline-watch-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-watch-"));
   const repository = path.join(temporaryParent, "repository");
   await fs.cp(fixtureRoot, repository, { recursive: true });
   let generationCount = 0;
@@ -426,7 +439,7 @@ test("watch regenerates after source changes", async () => {
     } finally {
       if (timeout) clearTimeout(timeout);
     }
-    const generated = await fs.readFile(path.join(repository, ".project-outline/src/new-worker.ts"), "utf8");
+    const generated = await fs.readFile(path.join(repository, ".cartograph/src/new-worker.ts"), "utf8");
     assert.match(generated, /export class NewWorker/);
     assert.match(generated, /run\(\): void \{ \}/);
   } finally {

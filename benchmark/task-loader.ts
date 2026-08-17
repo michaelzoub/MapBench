@@ -28,7 +28,7 @@ export async function loadTask(tasksRoot: string, id: string): Promise<LoadedTas
   const graderDirectory = path.join(directory, "grader");
   const entries = await fs.readdir(graderDirectory);
   if (entries.length === 0) throw new Error(`Task ${id} has no private grader files.`);
-  return { ...manifest, directory, prompt, graderDirectory };
+  return { ...manifest, directory, prompt, graderDirectory, execution: { kind: "answer" } };
 }
 
 export async function listTasks(tasksRoot: string): Promise<string[]> {
@@ -46,11 +46,12 @@ export async function listTasks(tasksRoot: string): Promise<string[]> {
   return tasks.sort();
 }
 
-export function expandCommand(command: string[], workspace: string, grader: string, answer = "", events = ""): string[] {
+export function expandCommand(command: string[], workspace: string, grader: string, answer = "", events = "", artifacts = ""): string[] {
   return command.map((part) => part
     .replaceAll("{workspace}", workspace)
     .replaceAll("{grader}", grader)
     .replaceAll("{sharedGraders}", path.resolve(import.meta.dirname, "graders"))
     .replaceAll("{answer}", answer)
-    .replaceAll("{events}", events));
+    .replaceAll("{events}", events)
+    .replaceAll("{artifacts}", artifacts));
 }

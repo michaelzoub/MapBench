@@ -1,26 +1,62 @@
-<!-- @project-outline generated -->
+<!-- @cartograph generated -->
 # Architecture Index
 
-This is a static, generated overview. Use narrow symbol queries for detail and verify runtime registration, dependency injection, and unresolved dynamic calls in source when they matter.
+This deterministic view is projected from one canonical structural representation. It distinguishes resolved static facts from external, heuristic, and unresolved boundaries; it does not infer runtime behavior.
 
-## Modules
+## Repository / packages / services
 
-- `go/main.go` — 1 callable symbol
-- `python/main.py` — 1 callable symbol
-- `rust/main.rs` — 1 callable symbol
-- `src/legacy.js` — 1 callable symbol
-- `src/main.ts` — 1 callable symbol
+### go/
+- `go/main.go` — 1 callable
+### python/
+- `python/main.py` — 1 callable; 1 public
+### rust/
+- `rust/main.rs` — 1 callable
+### src/
+- `src/legacy.js` — 1 callable; 1 public
+- `src/main.ts` — 1 callable; 1 public
 
-## Root Symbols
+## Major components and directories
 
-Symbols with no statically resolved repository callers:
+- `go/main.go` — module
+- `python/main.py` — module
+- `rust/main.rs` — module
+- `src/legacy.js` — module
+- `src/main.ts` — module
 
-- `go/main.go#goEntry` — `go/main.go:3:1`
-- `python/main.py#python_entry` — `python/main.py:1:1`
-- `rust/main.rs#rust_entry` — `rust/main.rs:1:1`
-- `src/legacy.js#legacy` — `src/legacy.js:1:8`
-- `src/main.ts#typed` — `src/main.ts:1:8`
+## Detected entrypoints and public surfaces
 
-## Representative Execution Chains
+- `python/main.py#python_entry` — python_entry() -> None (python/main.py:1:1)
+- `src/legacy.js#legacy` — legacy() (src/legacy.js:1:8)
+- `src/main.ts#typed` — typed(): void (src/main.ts:1:8)
 
-No multi-symbol execution chains were detected.
+## Component/module dependencies
+
+No resolved cross-module dependencies were detected.
+
+## Important execution flows
+
+No resolved multi-symbol execution flows were detected.
+
+## External boundaries
+
+No external boundaries were detected.
+
+## Unresolved / dynamic boundaries
+
+No unresolved relationships were detected.
+
+## Analysis coverage and limitations
+
+- Tool/schema: `cartograph` / 1
+- Languages: typescript, javascript, python, go, rust
+- Files scanned: 5; skipped: 0; parse failures: 0
+- Declarations: 5; relationships: 0; unresolved: 0
+- Known: resolved edges are parser/linker evidence anchored to source locations.
+- Heuristic or incomplete: exported surfaces and root flows are static indicators, not runtime registration or execution proof.
+- Limitations: dynamic dispatch, reflection, callbacks, dependency injection, generated code, and runtime configuration may be unresolved.
+
+## Static Call Roots
+
+Static roots are callable declarations with no resolved repository callers and at least one resolved outgoing call. They are navigation hints, not guaranteed runtime entrypoints.
+
+No connected static roots were detected.

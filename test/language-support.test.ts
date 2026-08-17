@@ -15,7 +15,7 @@ function fixture(name: string): string {
 }
 
 async function withFixture<T>(name: string, run: (root: string) => Promise<T>): Promise<T> {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), `project-outline-${name}-`));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), `cartograph-${name}-`));
   const root = path.join(temporaryParent, "repository");
   await fs.cp(fixture(name), root, { recursive: true });
   try {
@@ -31,14 +31,14 @@ test("detects and outlines a Python-only repository with Python-native relations
     assert.deepEqual(result.languages, ["python"]);
 
     const outline = await fs.readFile(path.join(result.out, "app/models.py"), "utf8");
-    assert.match(outline, /^# @project-outline generated/);
+    assert.match(outline, /^# @cartograph generated/);
     assert.match(outline, /from \.storage import load_job/);
     assert.match(outline, /from dataclasses import dataclass/);
     assert.match(outline, /from enum import Enum/);
     assert.match(outline, /from typing import Protocol/);
     assert.match(outline, /@dataclass\nclass Job:/);
     assert.match(outline, /class State\(Enum\):[\s\S]*READY = ["']ready["']/);
-    assert.match(outline, /async def run\(self, job: Job, retries: int\s*=\s*\.\.\.\) -> str:\n\s+[\"']{3}Calls: app\/models\.py#Worker\.prepare, app\/storage\.py#load_job; Unresolved project: self\.callback[\"']{3}\n\s+pass/);
+    assert.match(outline, /# Structural relationships:\n\s*# call:\n\s*#\s+app\/models\.py#Worker\.prepare\n\s*#\s+app\/storage\.py#load_job\n\s*# unresolved:\n\s*#\s+self\.callback\s*\n\s*async def run/);
     assert.match(outline, /API_TOKEN = \.\.\./);
     assert.match(outline, /def authenticate\(user: str, api_token: str\s*=\s*\.\.\.\) -> bool/);
     assert.doesNotMatch(outline, /must-not-leak|private-default|default-secret|select \*/);
@@ -81,7 +81,7 @@ test("detects TypeScript-only and ignores incidental frontend HTML", async () =>
 });
 
 test("Python callback arguments become call graph edges without hiding dynamic dispatch", async () => {
-  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-python-callbacks-"));
+  const temporaryParent = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-python-callbacks-"));
   const root = path.join(temporaryParent, "repository");
   await fs.mkdir(path.join(root, "app"), { recursive: true });
   await fs.writeFile(path.join(root, "pyproject.toml"), '[project]\nname = "callbacks"\nversion = "0.1.0"\n');
@@ -156,8 +156,8 @@ test("CLI accepts the language override", async () => {
     const cli = path.resolve(process.cwd(), "dist/src/cli.js");
     const { stdout } = await execFileAsync(process.execPath, [cli, "generate", "--root", root, "--language", "python"]);
     assert.match(stdout, /Generated 6 outline files/);
-    assert.equal(await fs.readFile(path.join(root, ".project-outline/service/worker.py"), "utf8").then(() => true), true);
-    await assert.rejects(fs.access(path.join(root, ".project-outline/src/client.ts")));
+    assert.equal(await fs.readFile(path.join(root, ".cartograph/service/worker.py"), "utf8").then(() => true), true);
+    await assert.rejects(fs.access(path.join(root, ".cartograph/src/client.ts")));
   });
 });
 
@@ -165,7 +165,7 @@ test("Go repositories are supported and repositories without source fail with ma
   await withFixture("unsupported", async (root) => {
     const result = await generateOutline({ root });
     assert.deepEqual(result.languages, ["go"]);
-    assert.match(await fs.readFile(path.join(result.out, "main.go"), "utf8"), /^\/\/ @project-outline generated/);
+    assert.match(await fs.readFile(path.join(result.out, "main.go"), "utf8"), /^\/\/ @cartograph generated/);
   });
   await withFixture("ambiguous", async (root) => assert.rejects(
     generateOutline({ root }),

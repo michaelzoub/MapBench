@@ -1,10 +1,10 @@
 {
-  "name": "project-outline-payments-example",
+  "name": "cartograph-payments-example",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/*.test.js"
+    "test": "bun run build && node --test dist/test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^24.1.0",

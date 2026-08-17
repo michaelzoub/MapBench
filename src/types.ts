@@ -115,7 +115,16 @@ export interface GenerationResult {
   languages: SupportedLanguage[];
 }
 
-export type CallGraphSymbolKind = "function" | "method" | "constructor";
+export type CallGraphSymbolKind =
+  | "function"
+  | "method"
+  | "constructor"
+  | "class"
+  | "struct"
+  | "interface"
+  | "trait"
+  | "type"
+  | "enum";
 
 export interface CallGraphEntry {
   file: string;

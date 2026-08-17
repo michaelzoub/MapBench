@@ -1,6 +1,9 @@
 node_modules/
 dist/
-.project-outline/
-.repo-outline/
+.cartograph/
+.mapbench/
+!benchmark/examples/payments-service/.mapbench/
+!benchmark/examples/payments-service/.mapbench/architecture.md
+.mapbench-cartograph-analysis/
 *.tgz
 benchmark-results/

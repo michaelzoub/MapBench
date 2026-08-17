@@ -1,0 +1,24 @@
+%% @cartograph generated
+%% Deterministic module-level view derived from the generated static call graph.
+flowchart LR
+  subgraph group_0["src"]
+    direction TB
+    module_1["types.ts<br/>3 type declarations"]
+  end
+  subgraph group_1["src/storage"]
+    direction TB
+    module_0["candidate-store.ts<br/>2 callables · 2 type declarations"]
+  end
+  subgraph group_2["src/workers"]
+    direction TB
+    module_2["worker-manager.ts<br/>6 callables · 1 type declaration · entry"]
+  end
+  subgraph dependencies["External dependencies"]
+    direction TB
+    dependency_0(["zod"])
+  end
+  module_2 -->|calls · creates| module_0
+  module_2 -.->|uses| dependency_0
+  classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px
+  classDef omitted fill:#f8fafc,stroke:#94a3b8,stroke-dasharray:4 4,color:#475569
+  class module_2 entry

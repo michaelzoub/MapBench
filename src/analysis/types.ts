@@ -9,7 +9,10 @@ export type StructuralSymbolKind =
   | "interface"
   | "trait"
   | "type"
-  | "enum";
+  | "enum"
+  | "module";
+
+export type StructuralVisibility = "public" | "private" | "protected" | "internal" | "unknown";
 
 export interface StructuralSymbol {
   id: string;
@@ -25,10 +28,67 @@ export interface StructuralSymbol {
   endByte: number;
   signature?: string;
   exported?: boolean;
+  visibility?: StructuralVisibility;
   owner?: string;
   parameters?: string[];
   receiverTypes?: Record<string, string>;
   body?: SourceRange;
+}
+
+export type StructuralEdgeType =
+  | "call"
+  | "instantiate"
+  | "import"
+  | "inherit"
+  | "implement"
+  | "reference";
+
+export type StructuralResolution = "resolved" | "external" | "unresolved" | "ambiguous";
+
+export interface StructuralEdge {
+  id: string;
+  type: StructuralEdgeType;
+  source: string;
+  target?: string;
+  targetLabel?: string;
+  file: string;
+  line: number;
+  column: number;
+  sourceOrder?: number;
+  resolution: StructuralResolution;
+  provenance?: string;
+}
+
+export interface StructuralUnresolved {
+  source?: string;
+  type: StructuralEdgeType;
+  text: string;
+  file: string;
+  line: number;
+  column: number;
+  sourceOrder?: number;
+  reason?: string;
+}
+
+export interface StructuralManifest {
+  tool: string;
+  schemaVersion: number;
+  toolVersion: string;
+  gitCommit?: string;
+  languages: SupportedLanguage[];
+  filesScanned: string[];
+  filesSkipped: string[];
+  parseFailures: Array<{ file: string; reason: string }>;
+  symbolCount: number;
+  edgeCount: number;
+  unresolvedCount: number;
+}
+
+export interface StructuralIR {
+  nodes: StructuralSymbol[];
+  edges: StructuralEdge[];
+  unresolved: StructuralUnresolved[];
+  manifest: StructuralManifest;
 }
 
 export interface ImportBinding {
@@ -74,9 +134,16 @@ export interface ParsedFile {
   removeTopLevel: SourceRange[];
 }
 
+export interface ParseFailure {
+  file: string;
+  reason: string;
+}
+
 export interface NormalizedProject {
   root: string;
   files: ParsedFile[];
   symbols: StructuralSymbol[];
   references: StructuralReference[];
+  parseFailures: ParseFailure[];
 }
+

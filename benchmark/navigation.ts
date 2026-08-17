@@ -1,8 +1,8 @@
 import type { CommandRecord, NavigationKind, NavigationMetrics, ReadRange } from "./types.js";
 
-const NAVIGATION_TOOL = /\b(?:cat|sed|head|tail|rg|grep|jq|find|ls|tree|wc|awk|python3?|node)\b/;
-const SOURCE_EXTENSION = /\.(?:ts|tsx|js|jsx|mjs|cjs|py)\b/i;
-const PATH_PATTERN = /(?:\.?\.?\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\.(?:ts|tsx|js|jsx|mjs|cjs|py|json|md|cfg|toml)/g;
+const NAVIGATION_TOOL = /\b(?:read|grep|find|ls|mapbench_query|cat|sed|head|tail|rg|jq|tree|wc|awk|python3?|node)\b/;
+const SOURCE_EXTENSION = /\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|mjs|cjs|kt|kts|php|py|rb|rs|scala|sol|swift|ts|tsx|vue|svelte)\b/i;
+const PATH_PATTERN = /(?:\.?\.?\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\.(?:c|cc|cpp|cs|go|h|hpp|java|js|jsx|mjs|cjs|kt|kts|php|py|rb|rs|scala|sol|swift|ts|tsx|vue|svelte|json|md|cfg|toml)/g;
 
 function cleanPath(value: string): string {
   return value.replace(/^["'`]+|["'`,;:)]+$/g, "").replace(/^\.\//, "");
@@ -15,10 +15,10 @@ export function accessedPaths(command: string): string[] {
 export function navigationKind(command: string): NavigationKind {
   if (!NAVIGATION_TOOL.test(command)) return "other";
   const paths = accessedPaths(command);
-  const mentionsOutline = paths.some((item) => item === ".project-outline" || item.startsWith(".project-outline/")) ||
-    /\.project-outline(?:\/|\b)/.test(command);
-  const withoutOutline = command.replace(/\.project-outline\/[A-Za-z0-9_.*?{}\/[\].-]+/g, "");
-  const mentionsSource = paths.some((item) => !item.startsWith(".project-outline/") && SOURCE_EXTENSION.test(item)) ||
+  const mentionsOutline = paths.some((item) => item === ".mapbench" || item.startsWith(".mapbench/")) ||
+    /\.mapbench(?:\/|\b)|\bmapbench_query\b/.test(command);
+  const withoutOutline = command.replace(/\.mapbench\/[A-Za-z0-9_.*?{}\/[\].-]+/g, "");
+  const mentionsSource = paths.some((item) => !item.startsWith(".mapbench/") && SOURCE_EXTENSION.test(item)) ||
     SOURCE_EXTENSION.test(withoutOutline);
   if (mentionsOutline && mentionsSource) return "mixed";
   if (mentionsOutline) return "outline";
@@ -28,13 +28,24 @@ export function navigationKind(command: string): NavigationKind {
 
 export function readRanges(command: string): ReadRange[] {
   const ranges: ReadRange[] = [];
+  const toolMatch = command.match(/^read\s+(\{.*\})$/s);
+  if (toolMatch) {
+    try {
+      const args = JSON.parse(toolMatch[1]) as { path?: unknown; offset?: unknown; limit?: unknown };
+      if (typeof args.path === "string") {
+        const start = typeof args.offset === "number" ? args.offset : 1;
+        const end = typeof args.limit === "number" ? start + args.limit - 1 : start;
+        ranges.push({ file: cleanPath(args.path), start, end, outline: args.path.startsWith(".mapbench/") });
+      }
+    } catch { /* malformed tool telemetry is ignored */ }
+  }
   const pattern = /\bsed\s+-n\s+["']?(\d+)(?:,(\d+))?p["']?\s+([^\s;&|]+)/g;
   for (const match of command.matchAll(pattern)) {
     const start = Number(match[1]);
     const end = Number(match[2] ?? match[1]);
     const file = cleanPath(match[3]);
     if (!file || !Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
-    ranges.push({ file, start, end, outline: file.startsWith(".project-outline/") });
+    ranges.push({ file, start, end, outline: file.startsWith(".mapbench/") });
   }
   return ranges;
 }
@@ -54,7 +65,7 @@ export function analyzeNavigation(commands: CommandRecord[]): NavigationMetrics 
     runningOutputBytes += command.outputBytes;
     cumulativeOutputBytes += runningOutputBytes;
     for (const file of command.accessedPaths) {
-      if (file.startsWith(".project-outline/")) outlineFiles.add(file);
+      if (file.startsWith(".mapbench/")) outlineFiles.add(file);
       else if (SOURCE_EXTENSION.test(file)) sourceFiles.add(file);
     }
     for (const range of command.readRanges.filter((item) => !item.outline)) {

@@ -6,8 +6,8 @@ import { ARCHITECTURE_HEADER } from "./architecture.js";
 import { MERMAID_HEADER } from "./mermaid.js";
 
 export const GENERATED_HEADER = "// @ts-nocheck";
-export const PYTHON_GENERATED_HEADER = "# @project-outline generated";
-export const TREE_SITTER_GENERATED_HEADER = "// @project-outline generated";
+export const PYTHON_GENERATED_HEADER = "# @cartograph generated";
+export const TREE_SITTER_GENERATED_HEADER = "// @cartograph generated";
 
 export const EXCLUDED_DIRECTORIES = new Set([
   ".git",
@@ -16,7 +16,9 @@ export const EXCLUDED_DIRECTORIES = new Set([
   ".next",
   ".nuxt",
   ".output",
-  ".project-outline",
+  ".cartograph",
+  ".mapbench",
+  ".mapbench-cartograph",
   ".turbo",
   ".vscode",
   "build",
@@ -240,7 +242,7 @@ function isCallGraph(value: unknown): boolean {
     const common = (
       typeof candidate.file === "string" &&
       typeof candidate.line === "number" && Number.isInteger(candidate.line) && candidate.line > 0 &&
-      (candidate.kind === "function" || candidate.kind === "method" || candidate.kind === "constructor") &&
+      ["function", "method", "constructor", "class", "struct", "interface", "trait", "type", "enum"].includes(String(candidate.kind)) &&
       typeof candidate.signature === "string" &&
       stringArray(candidate.calls) && stringArray(candidate.calledBy)
     );

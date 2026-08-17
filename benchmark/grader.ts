@@ -12,9 +12,10 @@ export async function runCheck(
   graderDirectory: string,
   answerFile = "",
   eventsFile = "",
+  artifactsDirectory = "",
 ): Promise<CheckResult> {
   if (!spec) return unavailableCheck();
-  const command = expandCommand(spec.command, workspace, graderDirectory, answerFile, eventsFile);
+  const command = expandCommand(spec.command, workspace, graderDirectory, answerFile, eventsFile, artifactsDirectory);
   const result = await runProcess(command, { cwd: workspace, timeoutMs: spec.timeoutMs ?? 300_000 });
   return {
     status: result.timedOut ? "timeout" : result.exitCode === 0 ? "passed" : "failed",
@@ -26,8 +27,14 @@ export async function runCheck(
   };
 }
 
-export async function runHiddenGrader(task: LoadedTask, workspace: string, answerFile = "", eventsFile = ""): Promise<GraderResult> {
-  const check = await runCheck(task.grader, workspace, task.graderDirectory, answerFile, eventsFile);
+export async function runHiddenGrader(
+  task: LoadedTask,
+  workspace: string,
+  answerFile = "",
+  eventsFile = "",
+  artifactsDirectory = "",
+): Promise<GraderResult> {
+  const check = await runCheck(task.grader, workspace, task.graderDirectory, answerFile, eventsFile, artifactsDirectory);
   let details: unknown = null;
   let score = 0;
   let maxScore = 1;

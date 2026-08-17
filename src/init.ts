@@ -11,7 +11,7 @@ import type { InitResult, OutlineOptions } from "./types.js";
 
 export async function initOutline(options: OutlineOptions = {}): Promise<InitResult> {
   const root = path.resolve(options.root ?? process.cwd());
-  const out = path.resolve(root, options.out ?? ".project-outline");
+  const out = path.resolve(root, options.out ?? ".cartograph");
   assertSafeOutput(root, out);
 
   const agentsFile = path.join(root, "AGENTS.md");
@@ -31,7 +31,7 @@ export async function initOutline(options: OutlineOptions = {}): Promise<InitRes
   const start = current.indexOf(MANAGED_SECTION_START);
   const end = current.indexOf(MANAGED_SECTION_END);
   if ((start === -1) !== (end === -1) || (start !== -1 && end < start)) {
-    throw new Error(`Refusing to update malformed project-outline section in ${agentsFile}`);
+    throw new Error(`Refusing to update malformed cartograph section in ${agentsFile}`);
   }
 
   let next: string;

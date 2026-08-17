@@ -18,17 +18,33 @@ export class WorkerManager<TCandidate extends Candidate = Candidate> {
     public retries = undefined,
   ) { }
 
-  async process(candidate: TCandidate): Promise<Evaluation> { "Calls: src/storage/candidate-store.ts#CandidateStore.find; External: zod#z.number().parse"; }
+  // Structural relationships:
+  // call:
+  //   src/storage/candidate-store.ts#CandidateStore.find
+  // external:
+  //   zod#z.number().parse
+  async process(candidate: TCandidate): Promise<Evaluation> { }
 
-  map<TResult>(candidate: TCandidate, callback: (value: TCandidate) => TResult): TResult { "Unresolved project: callback"; }
+  // Structural relationships:
+  // unresolved:
+  //   callback
+  map<TResult>(candidate: TCandidate, callback: (value: TCandidate) => TResult): TResult { }
 
   get capacity() { }
 
   set capacity(value: number) { }
 }
 
-export const createWorker = (store: CandidateStore) => { "Instantiates: src/workers/worker-manager.ts#WorkerManager"; };
+// Structural relationships:
+// instantiate:
+//   src/workers/worker-manager.ts#WorkerManager
+export const createWorker = (store: CandidateStore) => { };
 
 export function normalizeId(id = undefined) { }
 
-function bootstrap(): void { "Calls: src/workers/worker-manager.ts#createWorker; Instantiates: src/storage/candidate-store.ts#CandidateStore"; }
+// Structural relationships:
+// call:
+//   src/workers/worker-manager.ts#createWorker
+// instantiate:
+//   src/storage/candidate-store.ts#CandidateStore
+function bootstrap(): void { }

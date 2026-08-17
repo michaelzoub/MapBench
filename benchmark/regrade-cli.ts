@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   if (prior.schemaVersion !== 2 || !Array.isArray(prior.runs)) throw new Error("Unsupported summary.json schema.");
   if (typeof config.repo !== "string" || typeof config.targetCommit !== "string") throw new Error("config.json lacks repository provenance.");
 
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-regrade-"));
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-regrade-"));
   const workspace = path.join(temporary, "repository");
   try {
     await checked(["git", "clone", "--quiet", "--no-hardlinks", config.repo, workspace], temporary);
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       }),
     ]);
     await generateReport(resultsRoot, summary);
-    process.stdout.write(`Regraded ${runs.length} persisted responses without invoking Codex: ${resultsRoot}\n`);
+    process.stdout.write(`Regraded ${runs.length} persisted responses without invoking Pi: ${resultsRoot}\n`);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }

@@ -42,7 +42,7 @@ test("creates a deterministic module-level Mermaid architecture from call graph 
   const reversed = createArchitectureMermaid(Object.fromEntries(Object.entries(graph).reverse()));
 
   assert.equal(first, reversed);
-  assert.match(first, /^%% @project-outline generated\n/);
+  assert.match(first, /^%% @cartograph generated\n/);
   assert.match(first, /app\.ts<br\/>1 callable · entry/);
   assert.match(first, /service\.ts<br\/>1 callable/);
   assert.match(first, /store\.ts<br\/>1 callable/);

@@ -108,8 +108,8 @@ test("trace returns only a deterministic shortest relationship path", () => {
 });
 
 test("generated helper and installed CLI expose the progressive operations", async () => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "project-outline-query-"));
-  const out = path.join(temporary, ".project-outline");
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-query-"));
+  const out = path.join(temporary, ".cartograph");
   await fs.mkdir(out);
   await fs.writeFile(path.join(out, "callgraph.json"), `${JSON.stringify(graph, null, 2)}\n`);
   await fs.writeFile(path.join(out, "query.mjs"), createEmbeddedQueryScript());

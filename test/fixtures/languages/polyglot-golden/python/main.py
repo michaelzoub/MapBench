@@ -1,4 +1,4 @@
-# @project-outline generated
+# @cartograph generated
 
 def python_entry() -> None:
     pass

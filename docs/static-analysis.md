@@ -1,6 +1,6 @@
 # Static analysis and mapping
 
-This document describes what `project-outline` extracts, how the generated views differ, and where static analysis stops.
+This document describes what `cartograph` extracts, how the generated views differ, and where static analysis stops.
 
 ## Analysis pipeline
 
@@ -9,9 +9,11 @@ Generation is deterministic and does not call an LLM.
 1. Resolve the repository root and a safe child output directory.
 2. Detect meaningful TypeScript, JavaScript, Python, Go, and Rust source.
 3. Parse each file with the matching Tree-sitter grammar.
-4. Normalize declarations, imports, signatures, source locations, and references into a language-independent IR.
-5. Resolve repository-local symbols and statically knowable call/construction edges conservatively.
-6. Serialize one shared graph, then derive the skeleton, indexes, query helper, and Mermaid view.
+4. Normalize declarations, imports, signatures, source locations, and references into one canonical structural IR.
+5. Resolve repository-local symbols and statically knowable relationships conservatively, retaining source anchors, source order, resolution status, and provenance on first-class edges.
+6. Derive the architecture view, language-native declaration skeletons, call-graph projection, query CLI, and Mermaid view from that same IR.
+
+The canonical IR is the internal source of truth. It contains `nodes`, typed `edges`, `unresolved` relationships, and a `manifest`; it is not emitted into benchmark workspaces unless a future experiment explicitly tests raw-IR access.
 
 ### Language detection and source selection
 
@@ -19,54 +21,56 @@ The CLI supports TypeScript, JavaScript, Python, Go, and Rust, including mixed-l
 
 Source discovery excludes dependencies, generated output, tests, migrations, common build/infrastructure directories, and configuration files. Benchmark-private `tasks/`, `tests/`, `verifier/`, `solution/`, and `reference_solution/` trees are excluded so held-out verification or reference code cannot enter generated agent context. HTML, CSS, and shell files are not treated as application source.
 
-All syntax extraction originates from Tree-sitter. Language adapters describe grammar-specific declarations and references; they do not build artifacts themselves. The shared linker uses imports, module paths, local declarations, qualified identifiers, receiver/type annotations, assignments, and construction syntax when those signals identify one target. It leaves ambiguous targets unresolved rather than consulting a language compiler or guessing.
+## Canonical structural IR
 
-## The shared symbol graph
-
-Each repository symbol has a stable ID:
+Each declaration node has a stable ID:
 
 ```text
 <repository-relative path>#<qualified symbol>
 ```
 
-For example:
+The IR also contains module nodes, exact source ranges, signatures, visibility/export metadata, and a manifest with tool/schema version, git commit when available, languages, scanned/skipped files, parse failures, and counts.
 
-```text
-src/jobs.ts#Queue.run
-```
+Edges are first-class records with a typed relationship (`call`, `instantiate`, `import`, `inherit`, `implement`, or `reference`), source location, lexical order where available, resolution status (`resolved`, `external`, `unresolved`, or `ambiguous`), and provenance. Unresolved records preserve the source location and reason when known.
 
-Every symbol includes a 1-based file/line/column jump target and a declaration signature. Relationship fields are omitted when empty.
-
-Every callable also records its exact Tree-sitter declaration range as `line`, `column`, `endLine`, `endColumn`, `startByte`, and `endByte`. Line and column values are 1-based; byte offsets are UTF-8 and use a half-open `[startByte, endByte)` range.
-
-| Field | Meaning |
-|---|---|
-| `calls` | Sorted, statically resolved repository callees |
-| `callsInSourceOrder` | The first lexical occurrence of each callee when that differs from sorted order |
-| `calledBy` | Reverse repository-call edges |
-| `instantiates` | Repository types constructed by the symbol |
-| `unresolvedProjectCalls` | Dynamic or ambiguous calls that may target repository code |
-| `externalCalls` | Selected imported-package boundaries, qualified by import source |
-
-`callsInSourceOrder` is lexical evidence, not proof of runtime order. Callback arguments can become repository edges when the supplied function is statically knowable; invoking the callback parameter remains unresolved because another runtime caller could supply a different target.
+All reverse relationships, module dependencies, architecture summaries, skeleton comments, Mermaid aggregates, and graph-query results are projections of these nodes and edges. No projection maintains an independent relationship model.
 
 ## Generated views
 
-### Architecture index (`architecture.md`)
+### Architecture view (`architecture.md`)
 
-The compact Markdown index groups callables by module, identifies likely static roots, and includes bounded representative chains. It is the smallest artifact for questions such as “what are the main components?” or “where does this flow begin?”
-
-It is deliberately incomplete. Open the query interface or source before treating a representative chain as exhaustive or dynamically guaranteed.
+The deterministic Markdown view is hierarchical rather than a root/call-chain list. It covers repository/packages/services, major components/directories, exported surfaces and static entrypoint indicators, module dependencies, bounded important flows, external boundaries, unresolved/dynamic boundaries, and analysis coverage/limitations. Each section distinguishes resolved static facts from heuristic or unresolved evidence.
 
 ### Declaration skeleton (mirrored source paths)
 
-The skeleton preserves repository structure, imports, declarations, classes/structs/interfaces/traits, inheritance, decorators or modifiers, type annotations, parameters, and signatures. Implementations, comments, docstrings, ordinary control flow, and default or assigned values that may contain configuration or secrets are removed. Function bodies retain compact relationship metadata rather than ordinary implementation behavior.
+The skeleton preserves language-native imports, declarations, classes/structs/interfaces/traits, inheritance, decorators or modifiers, type annotations, parameters, and signatures. Implementations, comments, docstrings, ordinary control flow, and default or assigned values that may contain configuration or secrets are removed. Relationship data is generated as comments directly from canonical IR edges:
 
-Use it to identify candidate types and APIs, not to infer branch conditions or side effects that require implementation details.
+```ts
+// Structural relationships:
+// calls:
+//   src/files.ts#assertSafeOutput
+//   src/instructions.ts#createManagedAgentsSection
+export async function initOutline(
+  options: OutlineOptions = undefined
+): Promise<InitResult> {
+  /* implementation omitted */
+}
+```
 
-### Queryable call graph (`callgraph.json` and `query.mjs`)
+Relationships are never encoded as fake executable string expressions.
 
-The graph is the symbol-level source of truth for statically resolved relationships. `query.mjs` exposes bounded slices so an agent does not need to ingest or search the full JSON document.
+### Deterministic graph CLI
+
+The independently installable package exposes the same graph-navigation primitives as official top-level commands:
+
+```bash
+cartograph find "PaymentService"
+cartograph inspect "PaymentService.execute"
+cartograph explore "PaymentService.execute" --direction callees --depth 2
+cartograph trace "PaymentController.create" "DatabaseAdapter.insertPayment"
+```
+
+`cartograph` is also installed as a package binary alias. The commands perform no natural-language or LLM reasoning, return bounded structured JSON, and analyze the repository directly when no generated graph file is present. Harnesses invoke them through their normal shell tools.
 
 | Operation | Output contract |
 |---|---|
@@ -77,17 +81,12 @@ The graph is the symbol-level source of truth for statically resolved relationsh
 
 Ambiguous short names return candidates instead of silently selecting a symbol. Every bounded result reports truncation when matches or relationships were omitted.
 
-Recommended flow:
+`callsInSourceOrder` is lexical evidence, not proof of runtime order. Callback arguments can become repository edges when the supplied function is statically knowable; invoking the callback parameter remains unresolved because another runtime caller could supply a different target.
 
-1. Use `find` only when the exact symbol ID is unknown.
-2. Use `inspect` and follow returned IDs one relationship at a time.
-3. Use `explore` when repeated local inspection is insufficient.
-4. Use `trace` when both endpoints are known.
-5. Open narrow real-source ranges for dynamic behavior, conditions, or side effects.
 
 ### Mermaid module map (`architecture.mmd`)
 
-The Mermaid view aggregates the symbol graph into a bounded module-level diagram. It marks likely entry modules, combines repeated call and construction relationships, and retains selected external dependency boundaries. It is designed for human orientation and is not included in benchmark treatments.
+The Mermaid view is a bounded human visualization derived from the same call-graph projection. It is not included in benchmark treatments.
 
 ## What static analysis cannot prove
 
@@ -103,4 +102,4 @@ These boundaries remain visible as unresolved or external relationships where po
 
 ## Output safety
 
-`--out` must resolve to a child of `--root`. Generation refuses symlinked output paths that could escape the repository and only replaces or cleans directories whose files carry recognized generated markers. `project-outline init` manages only its delimited section in the root `AGENTS.md`.
+`--out` must resolve to a child of `--root`. Generation refuses symlinked output paths that could escape the repository and only replaces or cleans directories whose files carry recognized generated markers. `cartograph init` manages only its delimited section in the root `AGENTS.md`.

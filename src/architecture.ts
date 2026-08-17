@@ -1,103 +1,178 @@
 import type { CallGraph } from "./types.js";
+import type { StructuralEdge, StructuralIR, StructuralSymbol } from "./analysis/types.js";
 
-export const ARCHITECTURE_HEADER = "<!-- @project-outline generated -->";
+export const ARCHITECTURE_HEADER = "<!-- @cartograph generated -->";
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function displayList(items: readonly string[]): string {
-  return items.length ? items.map((item) => `\`${item}\``).join(", ") : "none";
-}
-
 function bounded(lines: readonly string[], limit: number, label: string): string[] {
   if (lines.length <= limit) return [...lines];
-  return [...lines.slice(0, limit), `- … ${lines.length - limit} additional ${label} omitted; query the mirror for detail.`];
+  return [...lines.slice(0, limit), `- … ${lines.length - limit} additional ${label} omitted; query the graph CLI for detail.`];
 }
 
-function representativeChains(graph: CallGraph, limit = 40, maxDepth = 12): string[][] {
-  const roots = Object.keys(graph)
-    .filter((id) => graph[id].calledBy.length === 0 && (graph[id].calls.length > 0 || (graph[id].instantiates?.length ?? 0) > 0))
-    .sort(compare);
-  const chains: string[][] = [];
+function isCallable(node: StructuralSymbol): boolean {
+  return node.kind === "function" || node.kind === "method" || node.kind === "constructor";
+}
 
-  const visit = (id: string, path: string[]): void => {
-    if (chains.length >= limit) return;
-    const nextPath = [...path, id];
-    const callees = (graph[id]?.callsInSourceOrder ?? graph[id]?.calls ?? []).filter((callee) => graph[callee]);
-    const next = callees.filter((callee) => !nextPath.includes(callee));
-    if (!next.length || nextPath.length >= maxDepth) {
-      chains.push(nextPath);
-      return;
+
+function legacyIR(graph: CallGraph): StructuralIR {
+  const nodes = Object.entries(graph).map(([id, entry]) => ({
+    id,
+    name: id.split("#").at(-1) ?? id,
+    qualifiedName: id.split("#").at(-1) ?? id,
+    kind: entry.kind,
+    file: entry.file,
+    startLine: entry.line,
+    startColumn: entry.column,
+    endLine: entry.endLine,
+    endColumn: entry.endColumn,
+    startByte: entry.startByte,
+    endByte: entry.endByte,
+    signature: entry.signature,
+    exported: false,
+    visibility: "unknown" as const,
+  }));
+  const edges: StructuralEdge[] = [];
+  for (const [source, entry] of Object.entries(graph)) {
+    for (const [order, target] of (entry.callsInSourceOrder ?? entry.calls).entries()) {
+      edges.push({ id: `call:${source}:${target}:${order}`, type: "call", source, target, file: entry.file, line: entry.line, column: entry.column, sourceOrder: order, resolution: "resolved", provenance: "legacy-callgraph" });
     }
-    for (const callee of next) visit(callee, nextPath);
-  };
-
-  for (const root of roots) visit(root, []);
-  return chains;
-}
-
-/** Create a bounded, deterministic overview for architecture questions. */
-export function createArchitectureSummary(graph: CallGraph): string {
-  const ids = Object.keys(graph).sort(compare);
-  const byFile = new Map<string, string[]>();
-  for (const id of ids) {
-    const symbols = byFile.get(graph[id].file) ?? [];
-    symbols.push(id);
-    byFile.set(graph[id].file, symbols);
+    for (const target of entry.instantiates ?? []) edges.push({ id: `instantiate:${source}:${target}`, type: "instantiate", source, target, file: entry.file, line: entry.line, column: entry.column, resolution: "resolved", provenance: "legacy-callgraph" });
+    for (const targetLabel of entry.externalCalls ?? []) edges.push({ id: `external:${source}:${targetLabel}`, type: "call", source, targetLabel, file: entry.file, line: entry.line, column: entry.column, resolution: "external", provenance: "legacy-callgraph" });
+    for (const targetLabel of entry.unresolvedProjectCalls ?? []) edges.push({ id: `unresolved:${source}:${targetLabel}`, type: "call", source, targetLabel, file: entry.file, line: entry.line, column: entry.column, resolution: "unresolved", provenance: "legacy-callgraph" });
   }
+  return {
+    nodes,
+    edges,
+    unresolved: edges.filter((edge) => edge.resolution === "unresolved").map((edge) => ({ source: edge.source, type: edge.type, text: edge.targetLabel ?? "", file: edge.file, line: edge.line, column: edge.column, reason: edge.provenance })),
+    manifest: { tool: "cartograph", schemaVersion: 1, toolVersion: "0.1.0", languages: [], filesScanned: [...new Set(nodes.map((node) => node.file))].sort(compare), filesSkipped: [], parseFailures: [], symbolCount: nodes.length, edgeCount: edges.length, unresolvedCount: edges.filter((edge) => edge.resolution === "unresolved").length },
+  };
+}
+function asIR(input: StructuralIR | CallGraph): StructuralIR {
+  if (Array.isArray((input as StructuralIR).nodes)) return input as StructuralIR;
+  return legacyIR(input as CallGraph);
+}
 
-  const moduleLines = bounded([...byFile].sort(([left], [right]) => compare(left, right)).map(([file, symbols]) => {
-    const outgoing = new Set<string>();
-    const instantiatedTypes = new Set<string>();
-    for (const id of symbols) {
-      for (const callee of graph[id].calls) {
-        const target = graph[callee]?.file;
-        if (target && target !== file) outgoing.add(target);
+function flowLines(ir: StructuralIR): string[] {
+  const nodes = new Map(ir.nodes.filter(isCallable).map((node) => [node.id, node]));
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of ir.edges.filter((candidate) => candidate.type === "call" && candidate.resolution === "resolved" && candidate.target)) {
+    const list = outgoing.get(edge.source) ?? [];
+    list.push(edge.target!);
+    outgoing.set(edge.source, list);
+    incoming.set(edge.target!, (incoming.get(edge.target!) ?? 0) + 1);
+  }
+  const roots = [...nodes.keys()].filter((id) => !incoming.has(id) && (outgoing.get(id)?.length ?? 0)).sort(compare);
+  const lines: string[] = [];
+  for (const root of roots) {
+    const visit = (id: string, path: string[], depth: number): void => {
+      const nextPath = [...path, id];
+      const next = [...new Set(outgoing.get(id) ?? [])].filter((candidate) => nodes.has(candidate) && !nextPath.includes(candidate)).sort(compare);
+      if (!next.length || depth >= 8) {
+        lines.push(`- ${nextPath.map((item) => `\`${item}\``).join(" → ")}`);
+        return;
       }
-      for (const instantiated of graph[id].instantiates ?? []) instantiatedTypes.add(instantiated);
-    }
-    const details = [
-      outgoing.size ? `calls ${displayList([...outgoing].sort(compare))}` : "",
-      instantiatedTypes.size ? `instantiates ${displayList([...instantiatedTypes].sort(compare))}` : "",
-    ].filter(Boolean).join("; ");
-    return `- \`${file}\` — ${symbols.length} callable symbol${symbols.length === 1 ? "" : "s"}${details ? `; ${details}` : ""}`;
-  }), 200, "modules");
+      for (const candidate of next) visit(candidate, nextPath, depth + 1);
+    };
+    visit(root, [], 0);
+    if (lines.length >= 40) break;
+  }
+  return bounded(lines, 40, "execution flows");
+}
 
-  const roots = ids.filter((id) => graph[id].calledBy.length === 0).sort((left, right) => {
-    const leftConnected = Number(graph[left].calls.length > 0 || (graph[left].instantiates?.length ?? 0) > 0);
-    const rightConnected = Number(graph[right].calls.length > 0 || (graph[right].instantiates?.length ?? 0) > 0);
-    return rightConnected - leftConnected || compare(left, right);
-  });
-  const rootLines = bounded(roots.map((id) => {
-    const entry = graph[id];
-    const relations = [
-      entry.calls.length ? `calls ${displayList(entry.calls)}` : "",
-      entry.instantiates?.length ? `instantiates ${displayList(entry.instantiates)}` : "",
-    ].filter(Boolean).join("; ");
-    return `- \`${id}\` — \`${entry.file}:${entry.line}:${entry.column}\`${relations ? `; ${relations}` : ""}`;
-  }), 100, "root symbols");
-
-  const chains = representativeChains(graph);
-  const chainLines = chains.map((chain) => `- ${chain.map((id) => `\`${id}\``).join(" → ")}`);
-
+/** Create a bounded, deterministic hierarchical architecture view from the canonical IR. */
+export function createArchitectureSummary(input: StructuralIR | CallGraph): string {
+  const ir = asIR(input);
+  const modules = ir.nodes.filter((node) => node.kind === "module").sort((left, right) => compare(left.id, right.id));
+  const symbols = ir.nodes.filter((node) => node.kind !== "module").sort((left, right) => compare(left.id, right.id));
+  const byComponent = new Map<string, StructuralSymbol[]>();
+  for (const module of modules) {
+    const component = module.file.split("/")[0] || ".";
+    const list = byComponent.get(component) ?? [];
+    list.push(module);
+    byComponent.set(component, list);
+  }
+  const componentLines = [...byComponent].sort(([left], [right]) => compare(left, right)).flatMap(([component, componentModules]) => [
+    `### ${component}/`,
+    ...componentModules.sort((left, right) => compare(left.file, right.file)).map((module) => {
+      const declarations = symbols.filter((node) => node.file === module.file);
+      const exported = declarations.filter((node) => node.exported).length;
+      const callableCount = declarations.filter((node) => isCallable(node)).length;
+      const typeCount = declarations.length - callableCount;
+      const details = [
+        callableCount ? `${callableCount} callable${callableCount === 1 ? "" : "s"}` : "",
+        typeCount ? `${typeCount} type declaration${typeCount === 1 ? "" : "s"}` : "",
+      ].filter(Boolean).join(", ");
+      return `- \`${module.file}\` — ${details || "no declarations"}${exported ? `; ${exported} public` : ""}`;
+    }),
+  ]);
+  const dependencyLines = new Map<string, Set<string>>();
+  for (const edge of ir.edges.filter((candidate) => candidate.resolution === "resolved" && candidate.target)) {
+    const source = ir.nodes.find((node) => node.id === edge.source);
+    const target = ir.nodes.find((node) => node.id === edge.target);
+    if (!source || !target || source.file === target.file) continue;
+    const key = `${source.file} → ${target.file}`;
+    const kinds = dependencyLines.get(key) ?? new Set<string>();
+    kinds.add(edge.type);
+    dependencyLines.set(key, kinds);
+  }
+  const dependencies = [...dependencyLines].sort(([left], [right]) => compare(left, right)).map(([pair, kinds]) => `- \`${pair}\` — ${[...kinds].sort(compare).join(", ")}`);
+  const publicLines = bounded(symbols.filter((node) => node.exported).map((node) => `- \`${node.id}\` — ${node.signature ?? `${node.kind} ${node.name}`} (${node.file}:${node.startLine}:${node.startColumn})`), 100, "public surfaces");
+  const externalLines = bounded(ir.edges.filter((edge) => edge.resolution === "external").map((edge) => `- \`${edge.source}\` — ${edge.type} ${edge.targetLabel ?? "external"} (${edge.file}:${edge.line}:${edge.column})`), 100, "external boundaries");
+  const unresolvedLines = bounded(ir.unresolved.map((item) => `- \`${item.source ?? "unknown"}\` — ${item.type} \`${item.text}\` (${item.file}:${item.line}:${item.column})${item.reason ? ` — ${item.reason}` : ""}`), 100, "unresolved boundaries");
+  const coverage = [
+    `- Tool/schema: \`${ir.manifest.tool}\` / ${ir.manifest.schemaVersion}`,
+    `- Languages: ${ir.manifest.languages.length ? ir.manifest.languages.join(", ") : "not recorded"}`,
+    `- Files scanned: ${ir.manifest.filesScanned.length}; skipped: ${ir.manifest.filesSkipped.length}; parse failures: ${ir.manifest.parseFailures.length}`,
+    `- Declarations: ${ir.manifest.symbolCount}; relationships: ${ir.manifest.edgeCount}; unresolved: ${ir.manifest.unresolvedCount}`,
+    "- Known: resolved edges are parser/linker evidence anchored to source locations.",
+    "- Heuristic or incomplete: exported surfaces and root flows are static indicators, not runtime registration or execution proof.",
+    "- Limitations: dynamic dispatch, reflection, callbacks, dependency injection, generated code, and runtime configuration may be unresolved.",
+  ];
   return `${ARCHITECTURE_HEADER}
 # Architecture Index
 
-This is a static, generated overview. Use narrow symbol queries for detail and verify runtime registration, dependency injection, and unresolved dynamic calls in source when they matter.
+This deterministic view is projected from one canonical structural representation. It distinguishes resolved static facts from external, heuristic, and unresolved boundaries; it does not infer runtime behavior.
 
-## Modules
+## Repository / packages / services
 
-${moduleLines.length ? moduleLines.join("\n") : "No callable modules were detected."}
+${componentLines.length ? componentLines.join("\n") : "No packages or services were detected."}
 
-## Root Symbols
+## Major components and directories
 
-Symbols with no statically resolved repository callers:
+${bounded(modules.map((module) => `- \`${module.file}\` — module`), 200, "modules").join("\n") || "No modules were detected."}
 
-${rootLines.length ? rootLines.join("\n") : "No root symbols were detected."}
+## Detected entrypoints and public surfaces
 
-## Representative Execution Chains
+${publicLines.length ? publicLines.join("\n") : "No exported public surfaces were detected."}
 
-${chainLines.length ? chainLines.join("\n") : "No multi-symbol execution chains were detected."}
+## Component/module dependencies
+
+${dependencies.length ? dependencies.join("\n") : "No resolved cross-module dependencies were detected."}
+
+## Important execution flows
+
+${flowLines(ir).join("\n") || "No resolved multi-symbol execution flows were detected."}
+
+## External boundaries
+
+${externalLines.length ? externalLines.join("\n") : "No external boundaries were detected."}
+
+## Unresolved / dynamic boundaries
+
+${unresolvedLines.length ? unresolvedLines.join("\n") : "No unresolved relationships were detected."}
+
+## Analysis coverage and limitations
+
+${coverage.join("\n")}
+
+## Static Call Roots
+
+Static roots are callable declarations with no resolved repository callers and at least one resolved outgoing call. They are navigation hints, not guaranteed runtime entrypoints.
+
+${bounded(symbols.filter(isCallable).filter((node) => !ir.edges.some((edge) => edge.type === "call" && edge.resolution === "resolved" && edge.target === node.id)).filter((node) => ir.edges.some((edge) => edge.source === node.id && edge.type === "call" && edge.resolution === "resolved")).map((node) => `- \`${node.id}\` — \`${node.file}:${node.startLine}:${node.startColumn}\``), 100, "static roots").join("\n") || "No connected static roots were detected."}
 `;
 }

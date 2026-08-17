@@ -1,3 +1,3 @@
-// @project-outline generated
+// @cartograph generated
 
 fn rust_entry() { unimplemented!() }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { cleanOutline, generateOutline, initOutline, navigateOutline, queryOutline, watchOutline } from "./index.js";
+import { TOOL_NAME } from "./analysis/ir.js";
 import type {
   CallGraphDirection,
   CallGraphNavigationRequest,
@@ -7,21 +8,22 @@ import type {
   QueryOptions,
 } from "./types.js";
 
-const HELP = `project-outline
+const HELP = `${TOOL_NAME}
 
 Usage:
-  project-outline generate [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
-  project-outline watch [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
-  project-outline clean [--root <directory>] [--out <directory>]
-  project-outline init [--root <directory>] [--out <directory>]
-  project-outline query find <terms> [--limit <1-100>] [--root <directory>] [--out <directory>]
-  project-outline query inspect <symbol> [--limit <1-100>] [--root <directory>] [--out <directory>]
-  project-outline query explore <symbol> [--direction <callers|callees|both>] [--depth <0-5>] [--limit <1-100>] [--root <directory>] [--out <directory>]
-  project-outline query trace <from> <to> [--direction <callers|callees|both>] [--max-depth <0-50>] [--root <directory>] [--out <directory>]
-  project-outline query <symbol> [--depth <0-3>] [--limit <1-100>] [--root <directory>] [--out <directory>]  # compatibility
-  project-outline benchmark [ask|init] [options]
-  project-outline --help
+  ${TOOL_NAME} generate [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
+  ${TOOL_NAME} watch [--root <directory>] [--out <directory>] [--language <typescript|javascript|python|go|rust>]
+  ${TOOL_NAME} clean [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} init [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} find <terms> [--limit <1-100>] [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} inspect <symbol> [--limit <1-100>] [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} explore <symbol> [--direction <callers|callees|both>] [--depth <0-5>] [--limit <1-100>] [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} trace <from> <to> [--direction <callers|callees|both>] [--max-depth <0-50>] [--root <directory>] [--out <directory>]
+  ${TOOL_NAME} query <symbol> [--depth <0-3>] [--limit <1-100>] [--root <directory>] [--out <directory>]  # compatibility
+  ${TOOL_NAME} benchmark [ask|init] [options]
+  ${TOOL_NAME} --help
 `;
+
 
 function parseOptions(args: string[]): OutlineOptions {
   const options: OutlineOptions = {};
@@ -123,6 +125,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "find" || command === "inspect" || command === "explore" || command === "trace") {
+    const { request, options } = parseNavigationOptions(command, args);
+    const result = await navigateOutline(request, options);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (("matches" in result && !result.matches.length) || ("resolution" in result && result.resolution !== "exact")) process.exitCode = 2;
+    return;
+  }
+
   if (command === "query") {
     const operation = args[0];
     if (operation === "find" || operation === "inspect" || operation === "explore" || operation === "trace") {
@@ -174,13 +184,12 @@ async function main(): Promise<void> {
     process.stdout.write(result.changed
       ? `${result.created ? "Created" : "Updated"} ${result.agentsFile}.\n`
       : `${result.agentsFile} is already up to date.\n`);
-    return;
   }
   throw new Error(`Unknown command: ${command}`);
 }
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`project-outline: ${message}\n`);
+  process.stderr.write(`${TOOL_NAME}: ${message}\n`);
   process.exitCode = 1;
 });

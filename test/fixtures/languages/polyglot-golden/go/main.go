@@ -1,5 +1,5 @@
-// @project-outline generated
+// @cartograph generated
 
 package main
 
-func goEntry() { panic("project-outline skeleton") }
+func goEntry() { panic("cartograph skeleton") }

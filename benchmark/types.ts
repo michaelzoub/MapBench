@@ -69,6 +69,40 @@ export interface CommandSpec {
   command: string[];
   timeoutMs?: number;
 }
+export interface DeepSweTaskExecution {
+  kind: "repository-edit";
+  source: "deep-swe";
+  sourceVersion: "1.1";
+  sourceRevision: string;
+  sourceCheckout: string;
+  externalId: string;
+  language: string;
+  repositoryUrl: string;
+  baseCommit: string;
+  environment: {
+    dockerImage: string;
+    os: "linux";
+    cpus: number;
+    memoryMb: number;
+    storageMb: number;
+    gpus: number;
+    networkMode: "no-network";
+    buildTimeoutMs: number;
+    timeoutMs: number;
+  };
+  verifier: {
+    environmentMode: "separate";
+    networkMode: "no-network";
+    timeoutMs: number;
+    buildTimeoutMs: number;
+    cpus: number;
+    memoryMb: number;
+    storageMb: number;
+  };
+}
+
+export type TaskExecution = { kind: "answer" } | DeepSweTaskExecution;
+
 
 export interface TaskManifest {
   version: 1;
@@ -87,10 +121,11 @@ export interface LoadedTask extends TaskManifest {
   directory: string;
   prompt: string;
   graderDirectory: string;
+  execution: TaskExecution;
 }
 
 export interface TokenCounts {
-  /** Codex input_tokens, inclusive of cached input. */
+  /** Pi total input, including cache reads and cache writes. */
   input: number | null;
   /** Exact input - cachedInput, unavailable unless both source fields exist. */
   uncachedInput: number | null;
@@ -101,8 +136,8 @@ export interface TokenCounts {
 }
 
 export interface TokenProvenance {
-  source: "codex-jsonl";
-  eventType: "turn.completed";
+  source: "pi-jsonl";
+  eventType: "message_end";
   eventLines: number[];
   rawEventFile: string | null;
   fields: {
@@ -186,7 +221,7 @@ export interface GraderResult extends CheckResult {
 }
 
 export interface RunResult {
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   pairId: string;
   taskId: string;
   condition: Condition;
@@ -195,6 +230,7 @@ export interface RunResult {
   baselineCommit: string;
   baselineTreeHash: string;
   promptSha256: string;
+  provider: string;
   model: string;
   status: "completed" | "failed" | "timeout";
   exitCode: number | null;
@@ -218,13 +254,18 @@ export interface RunResult {
   artifactDirectory: string;
   workspaceKept: boolean;
   isolation: {
+    harness: "pi";
     freshProcess: true;
     resumedSession: false;
     ephemeralSession: true;
     freshWorkspace: true;
-    codexHome: "fresh-auth-only";
-    initialCodexHomeFiles: string[];
-    codexHomeRemoved: true;
+    originalGitObjectsRemoved: true;
+    piHome: "fresh-auth-only";
+    initialPiHomeFiles: string[];
+    piHomeRemoved: true;
+    contextFiles: "disabled";
+    resources: "explicit-extension-only" | "task-docker-limits";
+    tools: "workspace-read-only" | "workspace-read-write-docker-isolated";
   };
   workspace?: string;
   error?: string;
@@ -253,12 +294,14 @@ export interface BenchmarkOptions {
   taskIds: string[];
   runs: number;
   conditions: Condition[];
+  provider: string;
   model: string;
   timeoutMs: number;
   dryRun: boolean;
   keepWorkspaces: boolean;
   outputRoot: string;
   tasksRoot: string;
+  deepSweCheckout?: string;
   pricingMode: "openrouter" | "off";
   pricingModel?: string;
   seed?: string;

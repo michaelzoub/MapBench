@@ -11,13 +11,13 @@ import type { CheckResult, RunResult, TokenUsage } from "../types.js";
 const check: CheckResult = { status: "unavailable", command: null, exitCode: null, durationMs: 0, stdout: "", stderr: "" };
 const tokens: TokenUsage = {
   input: 4, uncachedInput: 3, cachedInput: 1, output: 2, reasoning: 0, total: 6,
-  provenance: { source: "codex-jsonl", eventType: "turn.completed", eventLines: [1], rawEventFile: "usage-events.json",
-    fields: { input: "usage.input_tokens", uncachedInput: "derived: usage.input_tokens - usage.cached_input_tokens", cachedInput: "usage.cached_input_tokens", output: "usage.output_tokens",
-      reasoning: "usage.reasoning_output_tokens", total: "derived: usage.input_tokens + usage.output_tokens" } },
+  provenance: { source: "pi-jsonl", eventType: "message_end", eventLines: [1], rawEventFile: "usage-events.json",
+    fields: { input: "derived: message.usage.input + cacheRead + cacheWrite", uncachedInput: "derived: message.usage.input + cacheWrite", cachedInput: "message.usage.cacheRead", output: "message.usage.output",
+      reasoning: "message.usage.reasoning", total: "derived: total input + message.usage.output" } },
 };
 const run: RunResult = {
-  schemaVersion: 2, pairId: "task:run-001", taskId: "task", condition: "regular-code", run: 1, targetCommit: "a", baselineCommit: "b",
-  baselineTreeHash: "treehash", promptSha256: "prompthash", model: "fixed",
+  schemaVersion: 3, pairId: "task:run-001", taskId: "task", condition: "regular-code", run: 1, targetCommit: "a", baselineCommit: "b",
+  baselineTreeHash: "treehash", promptSha256: "prompthash", provider: "openai-codex", model: "fixed",
   status: "failed", exitCode: 1, durationMs: 1200, tokens,
   estimatedCostUsd: null, commands: [], commandCount: 0, failedCommandCount: 0, finalResponse: "", filesChanged: [], fileCount: 0,
   navigation: emptyNavigationMetrics(),
@@ -25,8 +25,9 @@ const run: RunResult = {
   hiddenGrader: { ...check, status: "failed", score: 0, maxScore: 1, passed: false,
     details: { metrics: { nodeRecall: 0.5, sourceLinesRetrieved: 12 } } }, checks: { regression: check, typecheck: check, build: check },
   artifactDirectory: "regular-code/task/run-001", workspaceKept: false,
-  isolation: { freshProcess: true, resumedSession: false, ephemeralSession: true, freshWorkspace: true,
-    codexHome: "fresh-auth-only", initialCodexHomeFiles: ["auth.json"], codexHomeRemoved: true },
+  isolation: { harness: "pi", freshProcess: true, resumedSession: false, ephemeralSession: true, freshWorkspace: true,
+    originalGitObjectsRemoved: true, piHome: "fresh-auth-only", initialPiHomeFiles: ["auth.json"], piHomeRemoved: true,
+    contextFiles: "disabled", resources: "explicit-extension-only", tools: "workspace-read-only" },
 };
 
 test("report generation is deterministic, self-contained, and emits every required graphic", async () => {
@@ -38,9 +39,11 @@ test("report generation is deterministic, self-contained, and emits every requir
     assert.deepEqual(Object.keys(graphics).sort(), [
       "figure-1-main-performance.svg",
       "figure-2-task-condition-heatmap.svg",
-      "figure-3-efficiency-frontiers.svg",
+      "figure-3a-mean-total-tokens.svg",
+      "figure-3b-mean-runtime.svg",
       "figure-4-navigation-cost.svg",
       "figure-5-per-task-treatment-effect.svg",
+      "figure-6-median-token-breakdown.svg",
     ]);
     const first = path.join(root, "first");
     const second = path.join(root, "second");
@@ -66,13 +69,26 @@ test("report generation is deterministic, self-contained, and emits every requir
     assert.match(markdown, /graphics\/figure-5-per-task-treatment-effect\.svg/);
     assert.match(markdown, /## Task-by-task arithmetic means/);
     assert.match(markdown, /sourceLinesRetrieved=12/);
-    assert.match(graphics["figure-1-main-performance.svg"], /95% Wilson/);
+    assert.match(graphics["figure-1-main-performance.svg"], /Pass rate by condition/);
+    assert.doesNotMatch(graphics["figure-1-main-performance.svg"], /Wilson|confidence|whisker/i);
     assert.match(graphics["figure-2-task-condition-heatmap.svg"], /data-task="task"/);
     assert.match(graphics["figure-2-task-condition-heatmap.svg"], /data-successes="0" data-samples="1"/);
-    assert.match(graphics["figure-3-efficiency-frontiers.svg"], /\(a\) Mean total tokens/);
-    assert.match(graphics["figure-3-efficiency-frontiers.svg"], /\(b\) Mean runtime \(seconds\)/);
-    assert.match(graphics["figure-4-navigation-cost.svg"], /right-censored/);
+    assert.match(graphics["figure-3a-mean-total-tokens.svg"], /Mean total tokens/);
+    assert.match(graphics["figure-3b-mean-runtime.svg"], /Mean runtime \(seconds\)/);
+    assert.doesNotMatch(graphics["figure-3a-mean-total-tokens.svg"], /Mean runtime/);
+    assert.doesNotMatch(graphics["figure-3b-mean-runtime.svg"], /Mean total tokens/);
+    assert.match(graphics["figure-3a-mean-total-tokens.svg"], /data-pass-rate=/);
+    assert.match(graphics["figure-3b-mean-runtime.svg"], /data-pass-rate=/);
+    assert.doesNotMatch(Object.values(graphics).join("\n"), /<text[^>]*>[^<]*(Wilson|confidence|whisker)/i);
+    assert.match(graphics["figure-4-navigation-cost.svg"], /data-observed="false"/);
     assert.match(graphics["figure-5-per-task-treatment-effect.svg"], /no matched Full pairs/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /Median token breakdown/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /data-median-total="6"/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /data-token-part="uncached" data-value="3"/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /Uncached input/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /Cached input/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /Visible output/);
+    assert.match(graphics["figure-6-median-token-breakdown.svg"], /Reasoning/);
     assert.doesNotMatch(Object.values(graphics).join("\n"), /source bytes|source KB|Output KB|Cumulative KB/i);
     assert.doesNotMatch(html, /Output KB|Cumulative KB/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }

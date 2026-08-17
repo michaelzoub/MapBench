@@ -1,50 +1,63 @@
-import type { CallGraph, CallGraphEntry } from "../types.js";
+import type { StructuralIR, StructuralSymbol } from "./types.js";
 import type { ParsedFile, SourceEdit } from "./types.js";
 import { applyEdits } from "./utils.js";
 
-function relationships(entry: CallGraphEntry | undefined): string {
-  if (!entry) return "";
-  return [
-    entry.calls.length ? `Calls: ${(entry.callsInSourceOrder ?? entry.calls).join(", ")}` : "",
-    entry.instantiates?.length ? `Instantiates: ${entry.instantiates.join(", ")}` : "",
-    entry.unresolvedProjectCalls?.length ? `Unresolved project: ${entry.unresolvedProjectCalls.join(", ")}` : "",
-    entry.externalCalls?.length ? `External: ${entry.externalCalls.join(", ")}` : "",
-  ].filter(Boolean).join("; ");
+function commentPrefix(file: ParsedFile): string {
+  return file.language === "python" ? "#" : "//";
 }
 
-function bodyReplacement(file: ParsedFile, start: number, message: string): string {
-  if (file.language === "python") {
-    const prefix = Buffer.from(file.source, "utf8").subarray(0, start).toString("utf8");
-    const line = prefix.slice(prefix.lastIndexOf("\n") + 1);
-    const indent = line.match(/^\s*/)?.[0] ?? "    ";
-    return message ? `\"\"\"${message.replace(/\"\"\"/g, "") }\"\"\"\n${indent}pass` : "pass";
+function relationshipComments(file: ParsedFile, symbol: StructuralSymbol, ir: StructuralIR): string {
+  const edges = ir.edges
+    .filter((edge) => edge.source === symbol.id)
+    .sort((left, right) => (left.sourceOrder ?? Number.MAX_SAFE_INTEGER) - (right.sourceOrder ?? Number.MAX_SAFE_INTEGER) ||
+      left.line - right.line || left.column - right.column || left.id.localeCompare(right.id));
+  if (!edges.length) return "";
+  const grouped = new Map<string, string[]>();
+  for (const edge of edges) {
+    const label = edge.target ?? edge.targetLabel;
+    if (!label) continue;
+    const relation = edge.resolution === "external" ? "external" : edge.resolution === "unresolved" || edge.resolution === "ambiguous" ? "unresolved" : edge.type;
+    const values = grouped.get(relation) ?? [];
+    values.push(label);
+    grouped.set(relation, values);
   }
-  if (file.language === "typescript" || file.language === "javascript") {
-    return message ? `{ ${JSON.stringify(message)}; }` : "{ }";
+  if (!grouped.size) return "";
+  const prefix = commentPrefix(file);
+  const sourcePrefix = Buffer.from(file.source, "utf8").subarray(0, symbol.startByte);
+  const lineStart = sourcePrefix.lastIndexOf(10) + 1;
+  const indent = sourcePrefix.subarray(lineStart).toString("utf8").match(/^\s*/)?.[0] ?? "";
+  const lines = [`${indent}${prefix} Structural relationships:`];
+  for (const relation of [...grouped.keys()].sort()) {
+    lines.push(`${indent}${prefix} ${relation}:`);
+    for (const value of [...new Set(grouped.get(relation) ?? [])]) lines.push(`${indent}${prefix}   ${value}`);
   }
-  const annotation = message ? `/* ${message.replace(/\*\//g, "")} */ ` : "";
-  return file.language === "go"
-    ? `{ ${annotation}panic(\"project-outline skeleton\") }`
-    : `{ ${annotation}unimplemented!() }`;
+  return `${lines.join("\n")}\n`;
 }
 
-export function createSkeleton(file: ParsedFile, graph: CallGraph): string {
+function bodyReplacement(file: ParsedFile): string {
+  if (file.language === "python") return "pass";
+  if (file.language === "typescript" || file.language === "javascript") return "{ }";
+  return file.language === "go" ? "{ panic(\"cartograph skeleton\") }" : "{ unimplemented!() }";
+}
+
+export function createSkeleton(file: ParsedFile, ir: StructuralIR): string {
   const edits: SourceEdit[] = [
     ...file.skeletonEdits,
     ...file.removeTopLevel.map((item) => ({ ...item, replacement: "" })),
   ];
   for (const symbol of file.symbols) {
-    if (!symbol.body) continue;
-    edits.push({
-      ...symbol.body,
-      replacement: bodyReplacement(file, symbol.body.start, relationships(graph[symbol.id])),
-    });
+    if (symbol.body) edits.push({ ...symbol.body, replacement: bodyReplacement(file) });
+    const comments = relationshipComments(file, symbol, ir);
+    if (comments) {
+      const declarationStart = Buffer.from(file.source, "utf8").subarray(0, symbol.startByte).lastIndexOf(10) + 1;
+      edits.push({ start: declarationStart, end: declarationStart, replacement: comments });
+    }
   }
   const body = applyEdits(file.source, edits).trim();
   const header = file.language === "python"
-    ? "# @project-outline generated"
+    ? "# @cartograph generated"
     : file.language === "typescript" || file.language === "javascript"
       ? "// @ts-nocheck"
-      : "// @project-outline generated";
+      : "// @cartograph generated";
   return `${header}\n\n${body}\n`;
 }

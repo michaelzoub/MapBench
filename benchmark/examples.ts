@@ -14,15 +14,15 @@ export async function materializeExampleRepository(name: string): Promise<{ repo
   if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`Invalid example name: ${name}`);
   const available = await listExamples();
   if (!available.includes(name)) throw new Error(`Unknown example ${name}. Available examples: ${available.join(", ")}`);
-  const cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), `project-outline-example-${name}-`));
+  const cleanupRoot = await fs.mkdtemp(path.join(os.tmpdir(), `cartograph-example-${name}-`));
   const repo = path.join(cleanupRoot, name);
   await fs.cp(path.join(EXAMPLES_ROOT, name), repo, { recursive: true });
   for (const args of [
     ["init", "--quiet"],
-    ["config", "user.name", "project-outline benchmark"],
-    ["config", "user.email", "benchmark@invalid.local"],
+    ["config", "user.name", "MapBench"],
+    ["config", "user.email", "mapbench@invalid.local"],
     ["add", "-A"],
-    ["commit", "--quiet", "-m", "payments benchmark snapshot"],
+    ["commit", "--quiet", "-m", "MapBench snapshot"],
   ]) {
     const result = await runProcess(["git", ...args], { cwd: repo, timeoutMs: 30_000 });
     if (result.exitCode !== 0) {

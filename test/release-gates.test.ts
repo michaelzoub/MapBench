@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createArchitectureSummary, generateOutline } from "../src/index.js";
+import { createStructuralIRFromDetected } from "../src/analysis/ir.js";
 import { parseProject } from "../src/analysis/parser.js";
 import { detectProject } from "../src/detection.js";
 import type { CallGraph } from "../src/types.js";
@@ -13,7 +14,7 @@ const repositoryFixtures = path.resolve(process.cwd(), "test/fixtures");
 const languageFixtures = path.join(repositoryFixtures, "languages");
 
 async function temporaryRepository(prefix: string): Promise<{ parent: string; root: string }> {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), `project-outline-${prefix}-`));
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), `cartograph-${prefix}-`));
   const root = path.join(parent, "repository");
   await fs.mkdir(root, { recursive: true });
   return { parent, root };
@@ -55,7 +56,7 @@ function pointAt(buffer: Buffer, offset: number): { line: number; column: number
 
 test("all five maintained Tree-sitter grammars feed one normalized structural IR", async () => {
   const packageJson = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
-  assert.deepEqual(Object.keys(packageJson.dependencies).sort(), [
+  assert.deepEqual(Object.keys(packageJson.dependencies).filter((name) => name.startsWith("tree-sitter")).sort(), [
     "tree-sitter",
     "tree-sitter-go",
     "tree-sitter-javascript",
@@ -84,6 +85,31 @@ test("all five maintained Tree-sitter grammars feed one normalized structural IR
     }
   }
 });
+test("canonical IR carries module nodes, typed anchored edges, unresolved records, and manifest counts", async () => {
+  const temporary = await copyFixture(path.join(repositoryFixtures, "basic/repository"));
+  try {
+    const detected = await detectProject({ root: temporary.root });
+    const project = await parseProject(detected);
+    const ir = createStructuralIRFromDetected(project, detected);
+    assert.ok(ir.nodes.some((node) => node.kind === "module" && node.id === "src/workers/worker-manager.ts#<module>"));
+    const process = ir.nodes.find((node) => node.id === "src/workers/worker-manager.ts#WorkerManager.process");
+    assert.ok(process);
+    const call = ir.edges.find((edge) => edge.source === process!.id && edge.type === "call" && edge.resolution === "resolved");
+    assert.deepEqual(call && { target: call.target, file: call.file, line: call.line, resolution: call.resolution }, {
+      target: "src/storage/candidate-store.ts#CandidateStore.find",
+      file: "src/workers/worker-manager.ts",
+      line: 25,
+      resolution: "resolved",
+    });
+    assert.ok(ir.edges.some((edge) => edge.type === "call" && edge.resolution === "unresolved" && edge.targetLabel === "callback"));
+    assert.equal(ir.manifest.symbolCount, ir.nodes.filter((node) => node.kind !== "module").length);
+    assert.equal(ir.manifest.edgeCount, ir.edges.length);
+    assert.equal(ir.manifest.unresolvedCount, ir.unresolved.length);
+    assert.deepEqual(ir.manifest.parseFailures, []);
+  } finally {
+    await fs.rm(temporary.parent, { recursive: true, force: true });
+  }
+});
 
 test("every graph callable carries an exact source range and architecture derives from that graph", async () => {
   const temporary = await copyFixture(path.join(languageFixtures, "polyglot"));
@@ -98,16 +124,16 @@ test("every graph callable carries an exact source range and architecture derive
       const declaration = source.subarray(entry.startByte, entry.endByte).toString("utf8");
       assert.ok(declaration.includes(id.slice(id.lastIndexOf("#") + 1).split(".").at(-1)!), id);
     }
-    assert.equal(
-      await fs.readFile(path.join(result.out, "architecture.md"), "utf8"),
-      createArchitectureSummary(graph),
-    );
+    const detected = await detectProject({ root: temporary.root });
+    const project = await parseProject(detected);
+    const ir = createStructuralIRFromDetected(project, detected);
+    assert.equal(await fs.readFile(path.join(result.out, "architecture.md"), "utf8"), createArchitectureSummary(ir));
   } finally {
     await fs.rm(temporary.parent, { recursive: true, force: true });
   }
 });
 
-test("Tree-sitter parse failures abort generation for every supported language", async () => {
+test("Tree-sitter parse failures remain explicit in the canonical manifest projection", async () => {
   const malformed = [
     ["broken.ts", "export function broken( {"],
     ["broken.js", "export function broken( {"],
@@ -119,24 +145,26 @@ test("Tree-sitter parse failures abort generation for every supported language",
     const temporary = await temporaryRepository(`malformed-${path.extname(name).slice(1)}`);
     try {
       await fs.writeFile(path.join(temporary.root, name), contents);
-      await assert.rejects(generateOutline({ root: temporary.root }), new RegExp(`Tree-sitter.*${name.replace(".", "\\.")}`));
-      await assert.rejects(fs.access(path.join(temporary.root, ".project-outline")));
+      const result = await generateOutline({ root: temporary.root });
+      const architecture = await fs.readFile(path.join(result.out, "architecture.md"), "utf8");
+      assert.match(architecture, /parse failures: 1/);
+      assert.match(architecture, new RegExp(`Files scanned: 1`));
+      assert.equal((await fileMap(result.out)).has(name), false);
     } finally {
       await fs.rm(temporary.parent, { recursive: true, force: true });
     }
   }
 
-  const preserved = await temporaryRepository("malformed-preserves-last-good-output");
+  const preserved = await temporaryRepository("malformed-replaces-last-good-output");
   try {
     const source = path.join(preserved.root, "main.ts");
     await fs.writeFile(source, "export function valid(): void {}\n");
     const valid = await generateOutline({ root: preserved.root });
-    const before = await fileMap(valid.out);
+    assert.equal((await fileMap(valid.out)).has("main.ts"), true);
     await fs.writeFile(source, "export function broken( {");
-    await assert.rejects(generateOutline({ root: preserved.root }), /Tree-sitter.*main\.ts/);
-    const after = await fileMap(valid.out);
-    assert.deepEqual([...after.keys()], [...before.keys()]);
-    for (const [relative, contents] of before) assert.deepEqual(after.get(relative), contents, relative);
+    const regenerated = await generateOutline({ root: preserved.root });
+    assert.equal((await fileMap(regenerated.out)).has("main.ts"), false);
+    assert.match(await fs.readFile(path.join(regenerated.out, "architecture.md"), "utf8"), /parse failures: 1/);
   } finally {
     await fs.rm(preserved.parent, { recursive: true, force: true });
   }

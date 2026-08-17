@@ -1,5 +1,5 @@
 {
-  "name": "project-outline",
+  "name": "cartograph",
   "version": "0.1.0",
   "description": "Generate compact repository architecture indexes, callable outlines, and machine-readable symbol relationships.",
   "type": "module",
@@ -12,28 +12,28 @@
     }
   },
   "bin": {
-    "project-outline": "./dist/src/cli.js",
-    "repo-outline": "./dist/src/cli.js"
+    "cartograph": "./dist/src/cli.js"
   },
   "files": [
     "dist/src",
     "dist/benchmark"
   ],
   "scripts": {
-    "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.json && node dist/src/copy-assets.js",
-    "outline": "npm run clean:dist && tsc -p tsconfig.json --noCheck && node dist/src/copy-assets.js && node dist/src/cli.js generate",
-    "test": "npm run build && node --test dist/test/*.test.js",
+    "clean:dist": "bun -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "bun run clean:dist && tsc -p tsconfig.json && node dist/src/copy-assets.js",
+    "outline": "bun run clean:dist && tsc -p tsconfig.json --noCheck && node dist/src/copy-assets.js && node dist/src/cli.js generate",
+    "test": "bun run build && node --test dist/test/*.test.js",
     "benchmark": "bun benchmark/cli.ts",
     "benchmark:report": "bun benchmark/report-cli.ts",
     "benchmark:regrade": "bun benchmark/regrade-cli.ts",
-    "benchmark:test": "bun test ./benchmark/test/harness.test.ts ./benchmark/test/report.test.ts",
-    "prepack": "npm run build"
+    "benchmark:test": "bun test ./benchmark/test/harness.test.ts ./benchmark/test/report.test.ts ./benchmark/test/deepswe.test.ts",
+    "prepack": "bun run build"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "smol-toml": "1.8.0",
     "tree-sitter": "0.22.4",
     "tree-sitter-go": "0.23.4",
     "tree-sitter-javascript": "0.23.1",

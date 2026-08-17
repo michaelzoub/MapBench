@@ -1,0 +1,204 @@
+{
+  "src/storage/candidate-store.ts#CandidateStore": {
+    "file": "src/storage/candidate-store.ts",
+    "line": 7,
+    "column": 8,
+    "endLine": 17,
+    "endColumn": 2,
+    "startByte": 110,
+    "endByte": 361,
+    "kind": "class",
+    "signature": "class CandidateStore",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/storage/candidate-store.ts#CandidateStore.constructor": {
+    "file": "src/storage/candidate-store.ts",
+    "line": 10,
+    "column": 3,
+    "endLine": 12,
+    "endColumn": 4,
+    "startByte": 184,
+    "endByte": 264,
+    "kind": "constructor",
+    "signature": "constructor(public readonly options: StoreOptions)",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/storage/candidate-store.ts#CandidateStore.find": {
+    "file": "src/storage/candidate-store.ts",
+    "line": 14,
+    "column": 3,
+    "endLine": 16,
+    "endColumn": 4,
+    "startByte": 268,
+    "endByte": 359,
+    "kind": "method",
+    "signature": "find(id: string): Promise<Candidate | undefined>",
+    "calls": [],
+    "calledBy": [
+      "src/workers/worker-manager.ts#WorkerManager.process"
+    ]
+  },
+  "src/storage/candidate-store.ts#StoreOptions": {
+    "file": "src/storage/candidate-store.ts",
+    "line": 3,
+    "column": 8,
+    "endLine": 5,
+    "endColumn": 2,
+    "startByte": 54,
+    "endByte": 101,
+    "kind": "interface",
+    "signature": "interface StoreOptions",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/types.ts#Candidate": {
+    "file": "src/types.ts",
+    "line": 1,
+    "column": 8,
+    "endLine": 4,
+    "endColumn": 2,
+    "startByte": 7,
+    "endByte": 63,
+    "kind": "interface",
+    "signature": "interface Candidate",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/types.ts#Evaluation": {
+    "file": "src/types.ts",
+    "line": 6,
+    "column": 8,
+    "endLine": 9,
+    "endColumn": 3,
+    "startByte": 72,
+    "endByte": 166,
+    "kind": "type",
+    "signature": "type Evaluation",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/types.ts#WorkerState": {
+    "file": "src/types.ts",
+    "line": 11,
+    "column": 8,
+    "endLine": 14,
+    "endColumn": 2,
+    "startByte": 175,
+    "endByte": 229,
+    "kind": "enum",
+    "signature": "enum WorkerState",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/workers/worker-manager.ts#WorkerManager": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 8,
+    "column": 8,
+    "endLine": 40,
+    "endColumn": 2,
+    "startByte": 272,
+    "endByte": 1050,
+    "kind": "class",
+    "signature": "class WorkerManager",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/workers/worker-manager.ts#WorkerManager.constructor": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 16,
+    "column": 3,
+    "endLine": 21,
+    "endColumn": 4,
+    "startByte": 438,
+    "endByte": 555,
+    "kind": "constructor",
+    "signature": "constructor( private readonly store: CandidateStore, public retries = undefined, )",
+    "calls": [],
+    "calledBy": []
+  },
+  "src/workers/worker-manager.ts#WorkerManager.map": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 29,
+    "column": 3,
+    "endLine": 31,
+    "endColumn": 4,
+    "startByte": 804,
+    "endByte": 928,
+    "kind": "method",
+    "signature": "map(candidate: TCandidate, callback: (value: TCandidate) = undefined): TResult",
+    "calls": [],
+    "calledBy": [],
+    "unresolvedProjectCalls": [
+      "callback"
+    ]
+  },
+  "src/workers/worker-manager.ts#WorkerManager.process": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 23,
+    "column": 3,
+    "endLine": 27,
+    "endColumn": 4,
+    "startByte": 559,
+    "endByte": 800,
+    "kind": "method",
+    "signature": "process(candidate: TCandidate): Promise<Evaluation>",
+    "calls": [
+      "src/storage/candidate-store.ts#CandidateStore.find"
+    ],
+    "calledBy": [],
+    "externalCalls": [
+      "zod#z.number().parse"
+    ]
+  },
+  "src/workers/worker-manager.ts#bootstrap": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 48,
+    "column": 1,
+    "endLine": 50,
+    "endColumn": 2,
+    "startByte": 1203,
+    "endByte": 1295,
+    "kind": "function",
+    "signature": "bootstrap(): void",
+    "calls": [
+      "src/workers/worker-manager.ts#createWorker"
+    ],
+    "calledBy": [],
+    "instantiates": [
+      "src/storage/candidate-store.ts#CandidateStore"
+    ]
+  },
+  "src/workers/worker-manager.ts#createWorker": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 42,
+    "column": 29,
+    "endLine": 42,
+    "endColumn": 80,
+    "startByte": 1080,
+    "endByte": 1131,
+    "kind": "function",
+    "signature": "createWorker(store: CandidateStore)",
+    "calls": [],
+    "calledBy": [
+      "src/workers/worker-manager.ts#bootstrap"
+    ],
+    "instantiates": [
+      "src/workers/worker-manager.ts#WorkerManager"
+    ]
+  },
+  "src/workers/worker-manager.ts#normalizeId": {
+    "file": "src/workers/worker-manager.ts",
+    "line": 44,
+    "column": 8,
+    "endLine": 46,
+    "endColumn": 2,
+    "startByte": 1141,
+    "endByte": 1201,
+    "kind": "function",
+    "signature": "normalizeId(id = undefined)",
+    "calls": [],
+    "calledBy": []
+  }
+}

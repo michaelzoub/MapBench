@@ -18,6 +18,7 @@ export async function runProcess(
     cwd: string;
     timeoutMs: number;
     env?: NodeJS.ProcessEnv;
+    replaceEnv?: boolean;
     unsetEnv?: string[];
     stdin?: string;
     onStdout?: (chunk: string) => void;
@@ -33,7 +34,7 @@ export async function runProcess(
     let stdoutLineBuffer = "";
     const stdoutLineElapsedMs: number[] = [];
     let timer: NodeJS.Timeout;
-    const childEnv = { ...process.env, ...options.env };
+    const childEnv = options.replaceEnv ? { ...options.env } : { ...process.env, ...options.env };
     for (const name of options.unsetEnv ?? []) delete childEnv[name];
     const child = spawn(command[0], command.slice(1), {
       cwd: options.cwd,

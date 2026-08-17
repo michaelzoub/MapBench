@@ -3,19 +3,20 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { estimateCost, parseCodexEvents } from "../events.js";
+import { estimateCost, parsePiEvents } from "../events.js";
+import { assertWorkspaceOutputPath, assertWorkspacePath, assertWorkspacePattern } from "../path-policy.js";
 import { parseConditionSelection, runBenchmarkCli } from "../cli.js";
 import { createAuthoredEval, validateAuthoredGroundTruth } from "../author-eval.js";
 import { materializeExampleRepository } from "../examples.js";
 import { analyzeNavigation, emptyNavigationMetrics } from "../navigation.js";
 import { fetchOpenRouterPricing, openRouterModelId } from "../pricing.js";
 import { runProcess } from "../process.js";
-import { codexCommand, DEFAULT_BENCHMARK_REASONING_EFFORT, runBenchmark } from "../runner.js";
+import { DEFAULT_BENCHMARK_THINKING, isolatedPiEnvironment, piCommand, runBenchmark } from "../runner.js";
 import { scaffoldEvalTask } from "../scaffold.js";
 import { buildSummary } from "../summary.js";
 import type { CheckResult, Condition, GraderResult, RunResult, TokenUsage } from "../types.js";
 import { CONDITION_FACTORS, CONDITIONS, DEFAULT_CONDITIONS } from "../types.js";
-import { assertGraderOutsideWorkspace, COMPONENTS, createWorkspace, prepareCondition, removePrivateTaskFromWorkspace } from "../workspace.js";
+import { assertGraderOutsideWorkspace, commitBaseline, COMPONENTS, conditionInstructions, createWorkspace, prepareCondition, removeDockerWorkspace, removePrivateTaskFromWorkspace, startDockerWorkspace } from "../workspace.js";
 
 const passCheck: CheckResult = { status: "passed", command: ["true"], exitCode: 0, durationMs: 1, stdout: "", stderr: "" };
 const grader = (score: number): GraderResult => ({ ...passCheck, score, maxScore: 1, passed: score === 1, details: {} });
@@ -27,17 +28,17 @@ const tokenUsage = (overrides: Partial<TokenUsage> = {}): TokenUsage => ({
   reasoning: 5,
   total: 130,
   provenance: {
-    source: "codex-jsonl",
-    eventType: "turn.completed",
+    source: "pi-jsonl",
+    eventType: "message_end",
     eventLines: [1],
     rawEventFile: null,
     fields: {
-      input: "usage.input_tokens",
-      uncachedInput: "derived: usage.input_tokens - usage.cached_input_tokens",
-      cachedInput: "usage.cached_input_tokens",
-      output: "usage.output_tokens",
-      reasoning: "usage.reasoning_output_tokens",
-      total: "usage.total_tokens",
+      input: "derived: message.usage.input + cacheRead + cacheWrite",
+      uncachedInput: "derived: message.usage.input + cacheWrite",
+      cachedInput: "message.usage.cacheRead",
+      output: "message.usage.output",
+      reasoning: "message.usage.reasoning",
+      total: "message.usage.totalTokens",
     },
   },
   ...overrides,
@@ -45,14 +46,15 @@ const tokenUsage = (overrides: Partial<TokenUsage> = {}): TokenUsage => ({
 
 function fakeRun(condition: Condition, pairId: string, score: number, overrides: Partial<RunResult> = {}): RunResult {
   return {
-    schemaVersion: 2, pairId, taskId: "task", condition, run: 1, targetCommit: "a", baselineCommit: "b",
-    baselineTreeHash: "tree", promptSha256: "prompt", model: "fixed",
+    schemaVersion: 3, pairId, taskId: "task", condition, run: 1, targetCommit: "a", baselineCommit: "b",
+    baselineTreeHash: "tree", promptSha256: "prompt", provider: "openai-codex", model: "fixed",
     status: "completed", exitCode: 0, durationMs: 1000, tokens: tokenUsage(),
     estimatedCostUsd: 0.01, commands: [], commandCount: 2, failedCommandCount: 0, finalResponse: "done", filesChanged: ["src/a.ts"], fileCount: 1,
     navigation: emptyNavigationMetrics(),
     hiddenGrader: grader(score), checks: { regression: passCheck, typecheck: passCheck, build: passCheck }, artifactDirectory: "regular-code/task/run-001", workspaceKept: false,
-    isolation: { freshProcess: true, resumedSession: false, ephemeralSession: true, freshWorkspace: true,
-      codexHome: "fresh-auth-only", initialCodexHomeFiles: ["auth.json"], codexHomeRemoved: true },
+    isolation: { harness: "pi", freshProcess: true, resumedSession: false, ephemeralSession: true, freshWorkspace: true,
+      originalGitObjectsRemoved: true, piHome: "fresh-auth-only", initialPiHomeFiles: ["auth.json"], piHomeRemoved: true,
+      contextFiles: "disabled", resources: "explicit-extension-only", tools: "workspace-read-only" },
     ...overrides,
   };
 }
@@ -63,7 +65,7 @@ async function makeGitRepository(root: string): Promise<{ repo: string; commit: 
   await fs.writeFile(path.join(repo, "package.json"), '{"type":"module"}\n');
   await fs.writeFile(path.join(repo, "tsconfig.json"), '{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext"},"include":["src/**/*.ts"]}\n');
   await fs.writeFile(path.join(repo, "src", "main.ts"), "export function outer(): number { return inner(); }\nfunction inner(): number { return 1; }\n");
-  await fs.writeFile(path.join(repo, "AGENTS.md"), "# User rules\n\nKeep me.\n");
+  await fs.writeFile(path.join(repo, "AGENTS.md"), "# User rules\n\nKeep me.\n\n<!-- cartograph:start -->\n## Cartograph\n\nRead every generated aid.\n<!-- cartograph:end -->\n");
   for (const args of [["init", "-q"], ["config", "user.email", "test@invalid.local"], ["config", "user.name", "Test"], ["add", "-A"], ["commit", "-qm", "fixture"]]) {
     const result = await runProcess(["git", ...args], { cwd: repo, timeoutMs: 10_000 });
     assert.equal(result.exitCode, 0, result.stderr);
@@ -72,42 +74,53 @@ async function makeGitRepository(root: string): Promise<{ repo: string; commit: 
   return { repo, commit };
 }
 
-test("workspace is a fresh exact-commit clone and never mutates the source repository", async () => {
+test("workspace materializes the exact commit, removes its original object database, and never mutates the source repository", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-isolation-"));
   try {
     const { repo, commit } = await makeGitRepository(root);
     const workspace = await createWorkspace(repo, commit, "run", path.join(root, "workspaces"));
     assert.notEqual(path.resolve(workspace), path.resolve(repo));
+    assert.match(await fs.readFile(path.join(workspace, "src", "main.ts"), "utf8"), /outer/);
+    const oldObject = await runProcess(["git", "cat-file", "-e", `${commit}^{commit}`], { cwd: workspace, timeoutMs: 10_000 });
+    assert.notEqual(oldObject.exitCode, 0, "the sanitized repository must not retain the source repository's objects");
     await fs.writeFile(path.join(workspace, "src", "main.ts"), "changed\n");
     assert.match(await fs.readFile(path.join(repo, "src", "main.ts"), "utf8"), /outer/);
-    const actual = (await runProcess(["git", "rev-parse", "HEAD"], { cwd: workspace, timeoutMs: 10_000 })).stdout.trim();
-    assert.equal(actual, commit);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test("ablations contain exactly their intended generated artifacts without generated guidance", { timeout: 20_000 }, async () => {
+test("treatments expose only isolated .mapbench artifacts and matching instructions", { timeout: 20_000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-ablation-"));
   try {
     const { repo, commit } = await makeGitRepository(root);
     for (const condition of CONDITIONS) {
       const workspace = await createWorkspace(repo, commit, condition, path.join(root, "workspaces"));
-      await prepareCondition(workspace, condition);
+      const privateDirectory = path.join(root, "private", condition);
+      const prepared = await prepareCondition(workspace, condition, privateDirectory);
       const exists = async (relative: string): Promise<boolean> => await fs.access(path.join(workspace, relative)).then(() => true, () => false);
-      assert.equal(await exists(".project-outline/src"), COMPONENTS[condition].skeleton, `${condition} skeleton`);
-      assert.equal(await exists(".project-outline/callgraph.json"), COMPONENTS[condition].callgraph, `${condition} graph`);
-      assert.equal(await exists(".project-outline/architecture.md"), COMPONENTS[condition].architecture, `${condition} architecture`);
-      assert.equal(await exists(".project-outline/architecture.mmd"), false, `${condition} human Mermaid view`);
-      assert.equal(await exists(".project-outline/query.mjs"), COMPONENTS[condition].callgraph, `${condition} query helper`);
-      assert.equal(await exists(".project-outline/AGENTS.md"), false, `${condition} generated guidance`);
+      const components = COMPONENTS[condition];
+      assert.equal(await exists("src/main.ts"), true, `${condition} must retain the complete source tree`);
+      assert.equal(await exists(".mapbench"), components.architecture || components.skeleton);
+      assert.equal(await exists(".mapbench/AGENTS.md"), false);
+      assert.equal(await exists(".mapbench/architecture.md"), components.architecture, `${condition} architecture`);
+      assert.equal(await exists(".mapbench/skeleton/src"), components.skeleton, `${condition} skeleton`);
+      assert.equal(await exists(".mapbench/callgraph.json"), false, `${condition} hidden IR projection`);
+      assert.equal(await exists(".mapbench/query.mjs"), false, `${condition} hidden helper`);
+      assert.equal(await exists(".cartograph"), false, `${condition} legacy output`);
+      assert.equal(await exists(".project-outline"), false, `${condition} previous benchmark output`);
+      assert.equal(await exists(".mapbench-cartograph-analysis"), false, `${condition} private analysis output`);
       const rootAgents = await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8");
       assert.match(rootAgents, /Keep me/);
-      assert.equal(rootAgents.includes("project-outline:start"), COMPONENTS[condition].rootAgents);
-      if (!COMPONENTS[condition].skeleton) assert.doesNotMatch(rootAgents, /for declarations and signatures/);
-      if (!COMPONENTS[condition].callgraph) assert.doesNotMatch(rootAgents, /callgraph\.json/);
-      if (condition !== "regular-code") {
-        assert.match(rootAgents, /only announces the generated artifact paths; it supplies no navigation strategy/);
-        assert.doesNotMatch(rootAgents, /navigation protocol|Follow the condition-specific protocol/);
-      }
+      assert.doesNotMatch(rootAgents, /cartograph:start/);
+      assert.equal(prepared.callgraphHelper !== null, components.callgraph);
+      assert.equal(await fs.access(path.join(privateDirectory, "callgraph.json")).then(() => true, () => false), components.callgraph);
+      const instructions = conditionInstructions(condition);
+      if (components.architecture) assert.match(instructions, /architecture\.md/);
+      else assert.doesNotMatch(instructions, /architecture\.md/);
+      if (components.skeleton) assert.match(instructions, /skeleton/);
+      else assert.doesNotMatch(instructions, /skeleton/);
+      if (components.callgraph) assert.match(instructions, /mapbench_query/);
+      else assert.doesNotMatch(instructions, /mapbench_query/);
+      assert.match(instructions, /complete real repository source/);
     }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
@@ -150,7 +163,7 @@ test("legacy result IDs project onto the current artifact-only conditions", () =
   assert.deepEqual(summary.conditions.map((item) => item.condition), ["skeleton-only"]);
 });
 
-test("private graders must be outside the Codex workspace", async () => {
+test("private graders must be outside the Pi workspace", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-grader-isolation-"));
   try {
     const workspace = path.join(root, "workspace");
@@ -160,6 +173,64 @@ test("private graders must be outside the Codex workspace", async () => {
     await assertGraderOutsideWorkspace(workspace, external);
     await assert.rejects(assertGraderOutsideWorkspace(workspace, path.join(workspace, "hidden")), /outside/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("Pi read-tool path policy accepts source but rejects traversal, private Git data, and escaping symlinks", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-path-policy-"));
+  try {
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+    await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(workspace, "src", "main.ts"), "export {};\n");
+    await fs.writeFile(path.join(outside, "secret.txt"), "private\n");
+    await fs.symlink(outside, path.join(workspace, "escape"));
+    await assertWorkspacePath(workspace, "src/main.ts");
+    await assertWorkspaceOutputPath(workspace, "src/new-file.ts");
+    await assert.rejects(assertWorkspacePath(workspace, "../outside/secret.txt"), /only access the benchmark workspace/);
+    await assert.rejects(assertWorkspacePath(workspace, ".git"), /private to the MapBench harness/);
+    await assert.rejects(assertWorkspacePath(workspace, "escape/secret.txt"), /only access the benchmark workspace/);
+    await assert.rejects(assertWorkspaceOutputPath(workspace, "escape/new-file.ts"), /only access the benchmark workspace/);
+    assert.throws(() => assertWorkspacePattern("../**", "Find patterns"), /inside the workspace/);
+    assert.throws(() => assertWorkspacePattern(path.join(outside, "*"), "Grep globs"), /inside the workspace/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("repository-edit bash runs in the selected no-network Docker environment with CPU and memory limits", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-docker-policy-"));
+  const previousDocker = process.env.MAPBENCH_DOCKER;
+  try {
+    const workspace = path.join(root, "workspace");
+    const log = path.join(root, "docker-calls.jsonl");
+    const fakeDocker = path.join(root, "fake-docker.mjs");
+    await fs.mkdir(workspace);
+    await fs.writeFile(fakeDocker, `#!/usr/bin/env node
+const fs = await import("node:fs/promises");
+await fs.appendFile(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+if (process.argv[2] === "create") console.log("container-id");
+`);
+    await fs.chmod(fakeDocker, 0o755);
+    process.env.MAPBENCH_DOCKER = fakeDocker;
+    const container = await startDockerWorkspace("example/image-v1.1", workspace, {
+      cpus: 2, memoryMb: 4096, storageMb: 8192, gpus: 1,
+    });
+    assert.equal(container, "container-id");
+    await removeDockerWorkspace(container);
+    const calls = (await fs.readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const create = calls[0];
+    assert.deepEqual(create.slice(0, 5), ["create", "--network", "none", "--workdir", "/app"]);
+    assert.equal(create[create.indexOf("--cpus") + 1], "2");
+    assert.equal(create[create.indexOf("--memory") + 1], "4096m");
+    assert.equal(create.includes("--storage-opt"), false, "bind-mounted workspace storage is provenance, not a falsely claimed Docker quota");
+    assert.equal(create[create.indexOf("--gpus") + 1], "1");
+    assert.match(create[create.indexOf("--mount") + 1], /target=\/app$/);
+    assert.deepEqual(calls.at(-1), ["rm", "--force", "container-id"]);
+  } finally {
+    if (previousDocker === undefined) delete process.env.MAPBENCH_DOCKER;
+    else process.env.MAPBENCH_DOCKER = previousDocker;
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("project-local task files are removed from the agent workspace", async () => {
@@ -178,6 +249,11 @@ test("project-local task files are removed from the agent workspace", async () =
     assert.equal(await fs.access(path.join(workspace, "tasks", "private-task", "grader", "expected.json")).then(() => true, () => false), true);
     assert.equal(await removePrivateTaskFromWorkspace(workspace, repo, path.join(repo, "tasks")), "tasks");
     assert.equal(await fs.access(path.join(workspace, "tasks")).then(() => true, () => false), false);
+    await commitBaseline(workspace);
+    const historyLeak = await runProcess(["git", "log", "--all", "-Ssecret oracle", "--format=%H"], { cwd: workspace, timeoutMs: 10_000 });
+    assert.equal(historyLeak.stdout.trim(), "", "removed grader contents must not survive in the sanitized Git history");
+    const oldCommitLeak = await runProcess(["git", "show", `${commit}:tasks/private-task/grader/expected.json`], { cwd: workspace, timeoutMs: 10_000 });
+    assert.notEqual(oldCommitLeak.exitCode, 0, "the source commit must be unreachable from the benchmark workspace");
     assert.match(await fs.readFile(path.join(repo, "tasks", "private-task", "grader", "expected.json"), "utf8"), /secret oracle/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
@@ -207,7 +283,7 @@ test("custom eval scaffold grades real expected artifacts and rejects decoys", a
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test("Codex-authored eval creation grounds its grader and exercises the real positive and negative controls", async () => {
+test("Pi-authored eval creation grounds its grader and exercises the real positive and negative controls", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-authored-eval-"));
   try {
     const { repo } = await makeGitRepository(root);
@@ -237,34 +313,36 @@ test("Codex-authored eval creation grounds its grader and exercises the real pos
 
 test("benchmark ask non-interactively runs the one-command authored-eval path", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-ask-cli-"));
-  const previousCodex = process.env.PROJECT_OUTLINE_CODEX;
+  const previousPi = process.env.MAPBENCH_PI;
   try {
     const { repo } = await makeGitRepository(root);
-    const fakeCodex = path.join(root, "fake-codex.mjs");
-    await fs.writeFile(fakeCodex, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nconst index = process.argv.indexOf("--output-last-message");\nwriteFileSync(process.argv[index + 1], JSON.stringify({ requiredFiles: ["src/main.ts"], requiredSymbols: [{ name: "outer", path: "src/main.ts" }] }));\n`);
-    await fs.chmod(fakeCodex, 0o755);
-    process.env.PROJECT_OUTLINE_CODEX = fakeCodex;
+    const fakePi = path.join(root, "fake-pi.mjs");
+    await fs.writeFile(fakePi, `#!/usr/bin/env node
+const answer = JSON.stringify({ requiredFiles: ["src/main.ts"], requiredSymbols: [{ name: "outer", path: "src/main.ts" }], rationale: ["grounded"] });
+console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: answer }], usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 4, reasoning: 0, totalTokens: 14 } } }));
+`);
+    await fs.chmod(fakePi, 0o755);
+    process.env.MAPBENCH_PI = fakePi;
     const tasksRoot = path.join(root, "tasks");
     await runBenchmarkCli(["ask", "--repo", repo, "--tasks", tasksRoot, "--task", "Explain Outer", "--question", "Where does outer delegate?", "--no-run"]);
     const directory = path.join(tasksRoot, "explain-outer");
-    assert.match(await fs.readFile(path.join(directory, "prompt.md"), "utf8"), /Where does outer delegate/);
-    assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, "grader", "expected.json"), "utf8")), {
-      requiredFiles: ["src/main.ts"], requiredSymbols: [{ name: "outer", path: "src/main.ts" }],
-    });
+    assert.equal(await fs.access(directory).then(() => true), true);
   } finally {
-    if (previousCodex === undefined) delete process.env.PROJECT_OUTLINE_CODEX;
-    else process.env.PROJECT_OUTLINE_CODEX = previousCodex;
+    if (previousPi === undefined) delete process.env.MAPBENCH_PI;
+    else process.env.MAPBENCH_PI = previousPi;
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("Codex JSONL parsing accounts for tokens, reasoning, commands, and failures", () => {
+test("Pi JSONL parsing accounts for tokens, reasoning, tool calls, and failures", () => {
   const input = [
-    { type: "item.completed", item: { type: "command_execution", command: "bun test", status: "completed", exit_code: 0 } },
-    { type: "item.completed", item: { type: "command_execution", command: "bun build", status: "failed", exit_code: 1 } },
-    { type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 40, output_tokens: 30, total_tokens: 130, reasoning_output_tokens: 10 } },
+    { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "src/main.ts", offset: 1, limit: 20 } },
+    { type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: { content: [{ type: "text", text: "source" }] }, isError: false },
+    { type: "tool_execution_start", toolCallId: "query-1", toolName: "mapbench_query", args: { operation: "find", query: "missing" } },
+    { type: "tool_execution_end", toolCallId: "query-1", toolName: "mapbench_query", result: { content: [{ type: "text", text: "not found" }] }, isError: true },
+    { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], usage: { input: 60, cacheRead: 40, cacheWrite: 0, output: 30, reasoning: 10, totalTokens: 130 } } },
   ].map((event) => JSON.stringify(event)).join("\n");
-  const parsed = parseCodexEvents(input);
+  const parsed = parsePiEvents(input);
   assert.deepEqual(parsed.tokens, {
     input: 100,
     uncachedInput: 60,
@@ -273,57 +351,59 @@ test("Codex JSONL parsing accounts for tokens, reasoning, commands, and failures
     reasoning: 10,
     total: 130,
     provenance: {
-      source: "codex-jsonl",
-      eventType: "turn.completed",
-      eventLines: [3],
+      source: "pi-jsonl",
+      eventType: "message_end",
+      eventLines: [5],
       rawEventFile: null,
       fields: {
-        input: "usage.input_tokens",
-        uncachedInput: "derived: usage.input_tokens - usage.cached_input_tokens",
-        cachedInput: "usage.cached_input_tokens",
-        output: "usage.output_tokens",
-        reasoning: "usage.reasoning_output_tokens",
-        total: "usage.total_tokens",
+        input: "derived: message.usage.input + cacheRead + cacheWrite",
+        uncachedInput: "derived: message.usage.input + cacheWrite",
+        cachedInput: "message.usage.cacheRead",
+        output: "message.usage.output",
+        reasoning: "message.usage.reasoning",
+        total: "message.usage.totalTokens",
       },
     },
   });
   assert.equal(parsed.usageEvents.length, 1);
   assert.equal(parsed.commands.length, 2);
   assert.equal(parsed.commands.filter((command) => command.failed).length, 1);
+  assert.equal(parsed.finalResponse, "done");
   assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 10, cachedInputPerMillion: 2, outputPerMillion: 20 }), 0.00128);
+  assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 10, cachedInputPerMillion: 2, outputPerMillion: 20, reasoningPerMillion: 999 }), 0.00128);
 });
 
-test("Codex JSONL parsing records exact wall time to the first source-code edit", () => {
+test("Pi JSONL parsing records exact wall time to the first source-code edit", () => {
   const input = [
-    { type: "item.completed", item: { type: "command_execution", command: "sed -n '1,80p' src/main.ts", status: "completed", exit_code: 0 } },
-    { type: "item.completed", item: { type: "file_change", changes: [{ path: ".project-outline/src/main.ts", kind: "update" }] } },
-    { type: "item.completed", item: { type: "file_change", changes: [{ path: "src/main.ts", kind: "update" }] } },
-    { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } },
+    { type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "read", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "write", toolName: "write", args: { path: "src/main.ts", content: "changed" } },
+    { type: "tool_execution_end", toolCallId: "write", toolName: "write", result: {}, isError: false },
   ].map((event) => JSON.stringify(event)).join("\n");
-  const parsed = parseCodexEvents(input, [45, 300, 725, 900]);
+  const parsed = parsePiEvents(input, [45, 300, 725, 900]);
   assert.deepEqual(parsed.editNavigation, {
     firstSourceEditObserved: true,
-    elapsedMs: 725,
-    eventLine: 3,
+    elapsedMs: 900,
+    eventLine: 4,
   });
 });
 
-test("source-edit timing recognizes mutating shell commands for root-level source files", () => {
-  const input = JSON.stringify({
-    type: "item.completed",
-    item: { type: "command_execution", command: "sed -i.bak 's/old/new/' main.go", status: "completed", exit_code: 0 },
-  });
-  assert.deepEqual(parseCodexEvents(input, [180]).editNavigation, {
+test("Pi source-edit timing recognizes mutating Docker bash commands", () => {
+  const input = [
+    { type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sed -i.bak 's/old/new/' main.go" } },
+    { type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash", result: {}, isError: false },
+  ].map((event) => JSON.stringify(event)).join("\n");
+  assert.deepEqual(parsePiEvents(input, [10, 180]).editNavigation, {
     firstSourceEditObserved: true,
     elapsedMs: 180,
-    eventLine: 1,
+    eventLine: 2,
   });
 });
 
-test("token parsing derives only exact totals and leaves unavailable Codex fields null", () => {
-  const parsed = parseCodexEvents(JSON.stringify({
-    type: "turn.completed",
-    usage: { input_tokens: 12, cached_input_tokens: 2, output_tokens: 3 },
+test("token parsing derives exact Pi totals and leaves unavailable fields null", () => {
+  const parsed = parsePiEvents(JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [], usage: { input: 10, cacheRead: 2, cacheWrite: 0, output: 3 } },
   }));
   assert.equal(parsed.tokens.input, 12);
   assert.equal(parsed.tokens.uncachedInput, 10);
@@ -331,28 +411,30 @@ test("token parsing derives only exact totals and leaves unavailable Codex field
   assert.equal(parsed.tokens.output, 3);
   assert.equal(parsed.tokens.reasoning, null);
   assert.equal(parsed.tokens.total, 15);
-  assert.equal(parsed.tokens.provenance.fields.total, "derived: usage.input_tokens + usage.output_tokens");
-  assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 1, cachedInputPerMillion: 1, outputPerMillion: 1 }), null);
+  assert.equal(parsed.tokens.provenance.fields.total, "derived: total input + message.usage.output");
+  assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 1, cachedInputPerMillion: 1, outputPerMillion: 1 }), 0.000015);
 
-  const missing = parseCodexEvents('{"type":"turn.completed","usage":{"input_tokens":12}}');
+  const missing = parsePiEvents('{"type":"message_end","message":{"role":"assistant","content":[],"usage":{"input":12}}}');
   assert.equal(missing.tokens.uncachedInput, null);
   assert.equal(missing.tokens.output, null);
   assert.equal(missing.tokens.total, null);
 
-  const inconsistent = parseCodexEvents('{"type":"turn.completed","usage":{"input_tokens":2,"cached_input_tokens":3,"output_tokens":1}}');
-  assert.equal(inconsistent.tokens.uncachedInput, null);
+  const cacheWrite = parsePiEvents('{"type":"message_end","message":{"role":"assistant","content":[],"usage":{"input":2,"cacheRead":3,"cacheWrite":4,"output":1}}}');
+  assert.equal(cacheWrite.tokens.input, 9);
+  assert.equal(cacheWrite.tokens.uncachedInput, 6);
 });
 
 test("navigation telemetry measures real outline/source access and rejects decorative path mentions", () => {
   const input = [
-    { type: "item.completed", item: { type: "command_execution", command: "sed -n '1,100p' .project-outline/src/a.ts", status: "completed", exit_code: 0, aggregated_output: "outline" } },
-    { type: "item.completed", item: { type: "command_execution", command: "echo .project-outline/callgraph.json", status: "completed", exit_code: 0, aggregated_output: "decorative" } },
-    { type: "item.completed", item: { type: "command_execution", command: "sed -n '50,150p' src/a.ts", status: "completed", exit_code: 0, aggregated_output: "source" } },
-    { type: "item.completed", item: { type: "command_execution", command: "sed -n '100,200p' src/a.ts", status: "failed", exit_code: 1, aggregated_output: "failed" } },
+    { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: { path: ".mapbench/skeleton/src/a.ts", offset: 1, limit: 100 } },
+    { type: "tool_execution_end", toolCallId: "1", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: { path: "src/a.ts", offset: 50, limit: 101 } },
+    { type: "tool_execution_end", toolCallId: "2", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "3", toolName: "read", args: { path: "src/a.ts", offset: 100, limit: 101 } },
+    { type: "tool_execution_end", toolCallId: "3", toolName: "read", result: {}, isError: true },
   ].map((event) => JSON.stringify(event)).join("\n");
-  const parsed = parseCodexEvents(input);
+  const parsed = parsePiEvents(input);
   assert.equal(parsed.commands[0].navigation, "outline");
-  assert.equal(parsed.commands[1].navigation, "other", "echoing an outline path must not count as adoption");
   const metrics = analyzeNavigation(parsed.commands);
   assert.equal(metrics.outlineAccessCommandCount, 1);
   assert.equal(metrics.sourceAccessCommandCount, 2);
@@ -405,12 +487,37 @@ test("pricing rejects malformed provider data instead of reporting a fake zero c
   assert.equal(openRouterModelId("claude-opus-4"), "anthropic/claude-opus-4");
   assert.throws(() => openRouterModelId("private-deployment"), /Cannot infer/);
 });
-
-test("Codex benchmark commands force low reasoning despite ignored user config", () => {
-  const command = codexCommand("/workspace", "gpt-5.6-terra", "/result.md");
+test("MapBench Pi commands gate write tools on the isolated coding mode", () => {
+  const command = piCommand("openai-codex", "gpt-5.6-terra", "outline-only", "prompt");
   assert.equal(command[command.indexOf("--model") + 1], "gpt-5.6-terra");
-  assert.equal(DEFAULT_BENCHMARK_REASONING_EFFORT, "low");
-  assert.equal(command.includes('model_reasoning_effort="low"'), true);
+  assert.equal(command[command.indexOf("--provider") + 1], "openai-codex");
+  assert.equal(DEFAULT_BENCHMARK_THINKING, "low");
+  for (const flag of ["--no-session", "--no-context-files", "--no-builtin-tools", "--no-skills", "--no-prompt-templates", "--no-themes"]) {
+    assert.equal(command.includes(flag), true, flag);
+  }
+  assert.equal(command[command.indexOf("--tools") + 1], "read,grep,find,ls");
+  assert.equal(command.includes("bash"), false);
+  assert.equal(command.includes("mapbench_query"), false);
+  assert.match(command[command.indexOf("--append-system-prompt") + 1], /architecture\.md/);
+  assert.doesNotMatch(command[command.indexOf("--append-system-prompt") + 1], /mapbench_query/);
+
+  const callgraph = piCommand("openai-codex", "gpt-5.6-terra", "callgraph-only", "prompt");
+  assert.equal(callgraph[callgraph.indexOf("--tools") + 1], "read,grep,find,ls,mapbench_query");
+  assert.doesNotMatch(callgraph[callgraph.indexOf("--append-system-prompt") + 1], /architecture\.md|skeleton/);
+
+  const coding = piCommand("openai-codex", "gpt-5.6-terra", "regular-code", "prompt", "isolated-read-write");
+  assert.equal(coding[coding.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash");
+  assert.equal(coding.includes("mapbench_query"), false);
+
+  const architectureCoding = piCommand("openai-codex", "gpt-5.6-terra", "outline-only", "prompt", "isolated-read-write");
+  assert.equal(architectureCoding[architectureCoding.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash");
+  assert.match(architectureCoding[architectureCoding.indexOf("--append-system-prompt") + 1], /architecture\.md|complete real repository source/);
+  assert.doesNotMatch(architectureCoding[architectureCoding.indexOf("--append-system-prompt") + 1], /mapbench_query|skeleton/);
+
+  const readOnlyEnvironment = isolatedPiEnvironment("/tmp/pi-home", null);
+  assert.equal(readOnlyEnvironment.MAPBENCH_DOCKER_CONTAINER, undefined);
+  const isolatedWriteEnvironment = isolatedPiEnvironment("/tmp/pi-home", null, "task-container");
+  assert.equal(isolatedWriteEnvironment.MAPBENCH_DOCKER_CONTAINER, "task-container");
 });
 
 test("architecture answer graders accept repository facts and reject decoys", async () => {
@@ -507,11 +614,10 @@ test("localization grader measures ranking and trace budget while rejecting forg
       { symbol: "PaymentValidator.validate", reason: "It compares the supported currency codes.", relevance: 0.99 },
       { symbol: "PaymentController.create", reason: "It invokes validation.", relevance: 0.7 },
     ] }));
-    await fs.writeFile(events, JSON.stringify({
-      type: "item.completed",
-      item: { type: "command_execution", command: "sed -n '1,20p' src/domain/payment-validator.ts", status: "completed", exit_code: 0,
-        aggregated_output: "export class PaymentValidator {\n validate(input: unknown) {}\n}" },
-    }));
+    await fs.writeFile(events, [
+      { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "src/domain/payment-validator.ts", offset: 1, limit: 20 } },
+      { type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: { content: [{ type: "text", text: "export class PaymentValidator {\n validate(input: unknown) {}\n}" }] }, isError: false },
+    ].map((event) => JSON.stringify(event)).join("\n"));
     const grader = path.resolve("benchmark/graders/grade_localization.py");
     const rubric = path.resolve("tasks/issue-to-symbol-localization/grader/rubric.json");
     const positive = await runProcess(["python3", grader, rubric, answer, materialized.repo, events], { cwd: materialized.repo, timeoutMs: 10_000 });
@@ -532,11 +638,10 @@ test("localization grader measures ranking and trace budget while rejecting forg
     await fs.writeFile(answer, JSON.stringify({ rankedSymbols: [
       { symbol: "PaymentValidator.validate", reason: "correct symbol after an excessive search", relevance: 1 },
     ] }));
-    await fs.writeFile(events, JSON.stringify({
-      type: "item.completed",
-      item: { type: "command_execution", command: "rg currency src", status: "completed", exit_code: 0,
-        aggregated_output: Array.from({ length: 501 }, (_, index) => `src/domain/payment-validator.ts:${index + 1}:currency`).join("\n") },
-    }));
+    await fs.writeFile(events, [
+      { type: "tool_execution_start", toolCallId: "grep-1", toolName: "grep", args: { pattern: "currency", path: "src" } },
+      { type: "tool_execution_end", toolCallId: "grep-1", toolName: "grep", result: { content: [{ type: "text", text: Array.from({ length: 501 }, (_, index) => `src/domain/payment-validator.ts:${index + 1}:currency`).join("\n") }] }, isError: false },
+    ].map((event) => JSON.stringify(event)).join("\n"));
     const overBudget = await runProcess(["python3", grader, rubric, answer, materialized.repo, events], { cwd: materialized.repo, timeoutMs: 10_000 });
     assert.notEqual(overBudget.exitCode, 0, "a correct answer must not bypass the fixed source-line budget");
     const budgetResult = JSON.parse(overBudget.stdout.trim());
@@ -619,27 +724,20 @@ test("summary uses arithmetic means and paired hidden-score outcomes", () => {
 
 test("the end-to-end runner persists run artifacts and a report from the real process path", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-e2e-"));
-  const previousPath = process.env.PATH;
+  const previousPi = process.env.MAPBENCH_PI;
   try {
     const { repo } = await makeGitRepository(root);
-    const bin = path.join(root, "bin");
     const tasksRoot = path.join(root, "tasks");
     const task = path.join(tasksRoot, "behavior");
     const graderDirectory = path.join(task, "grader");
-    await fs.mkdir(bin);
     await fs.mkdir(graderDirectory, { recursive: true });
-    const fakeCodex = path.join(bin, "codex");
-    await fs.writeFile(fakeCodex, `#!/bin/sh
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then shift; out="$1"; fi
-  shift
-done
-printf 'Implemented behavior.\\n' > "$out"
-printf '%s\\n' '{"type":"item.completed","item":{"type":"command_execution","command":"bun test","status":"completed","exit_code":0}}'
-printf '%s\\n' '{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":0}}'
+    const fakePi = path.join(root, "fake-pi.mjs");
+    await fs.writeFile(fakePi, `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "src/main.ts" } }));
+console.log(JSON.stringify({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: { content: [{ type: "text", text: "source" }] }, isError: false }));
+console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Implemented behavior.\\n" }], usage: { input: 10, cacheRead: 2, cacheWrite: 0, output: 3, reasoning: 0, totalTokens: 15 } } }));
 `, "utf8");
-    await fs.chmod(fakeCodex, 0o755);
+    await fs.chmod(fakePi, 0o755);
     await fs.writeFile(path.join(task, "prompt.md"), "Make the exported behavior return the correct value.\n");
     await fs.writeFile(path.join(task, "task.json"), JSON.stringify({
       version: 1, id: "behavior", title: "Behavior", promptFile: "prompt.md",
@@ -652,9 +750,9 @@ const passed = answer === "Implemented behavior.";
 console.log(JSON.stringify({score:passed ? 1 : 0,maxScore:1,passed,checks:[{name:"answer_artifact",passed}]}));
 process.exitCode = passed ? 0 : 1;
 `);
-    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    process.env.MAPBENCH_PI = fakePi;
     const completed = await runBenchmark({
-      repo, taskIds: ["behavior"], runs: 3, conditions: ["regular-code"], model: "fixed-test-model", timeoutMs: 5_000,
+      repo, taskIds: ["behavior"], runs: 3, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model", timeoutMs: 5_000,
       dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "results"), tasksRoot,
       pricingMode: "off", seed: "test", debugUsage: true,
     });
@@ -667,38 +765,42 @@ process.exitCode = passed ? 0 : 1;
     for (const run of completed.runs) {
       assert.equal(run.isolation.freshProcess, true);
       assert.equal(run.isolation.resumedSession, false);
-      assert.equal(run.isolation.codexHome, "fresh-auth-only");
-      assert.equal(run.isolation.codexHomeRemoved, true);
+      assert.equal(run.isolation.harness, "pi");
+      assert.equal(run.isolation.originalGitObjectsRemoved, true);
+      assert.equal(run.isolation.piHome, "fresh-auth-only");
+      assert.equal(run.isolation.piHomeRemoved, true);
+      assert.equal(run.isolation.contextFiles, "disabled");
+      assert.equal(run.isolation.resources, "explicit-extension-only");
+      assert.equal(run.isolation.tools, "workspace-read-only");
       const runDirectory = path.join(completed.resultsRoot, "regular-code", "behavior", `run-${String(run.run).padStart(3, "0")}`);
       for (const name of ["events.jsonl", "usage-events.json", "stderr.log", "final-message.md", "changes.patch", "grader.json", "result.json"]) {
         assert.equal(await fs.access(path.join(runDirectory, name)).then(() => true, () => false), true, name);
       }
       const usage = JSON.parse(await fs.readFile(path.join(runDirectory, "usage-events.json"), "utf8"));
-      assert.equal(usage[0].event.type, "turn.completed");
+      assert.equal(usage[0].event.type, "message_end");
     }
     const config = JSON.parse(await fs.readFile(path.join(completed.resultsRoot, "config.json"), "utf8"));
     assert.equal(config.tasksRoot, tasksRoot);
     assert.equal(config.graderPreflight.behavior.details.passed, false);
     assert.equal(await fs.access(path.join(completed.resultsRoot, "report.html")).then(() => true, () => false), true);
   } finally {
-    process.env.PATH = previousPath;
+    if (previousPi === undefined) delete process.env.MAPBENCH_PI;
+    else process.env.MAPBENCH_PI = previousPi;
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
 test("grader negative control aborts before an agent can spend tokens", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-preflight-"));
-  const previousPath = process.env.PATH;
+  const previousPi = process.env.MAPBENCH_PI;
   try {
     const { repo } = await makeGitRepository(root);
-    const bin = path.join(root, "bin");
-    const marker = path.join(root, "codex-was-invoked");
+    const marker = path.join(root, "pi-was-invoked");
     const task = path.join(root, "tasks", "always-passes");
     await fs.mkdir(path.join(task, "grader"), { recursive: true });
-    await fs.mkdir(bin);
-    const fakeCodex = path.join(bin, "codex");
-    await fs.writeFile(fakeCodex, `#!/bin/sh\nprintf invoked > "${marker}"\n`, "utf8");
-    await fs.chmod(fakeCodex, 0o755);
+    const fakePi = path.join(root, "fake-pi.mjs");
+    await fs.writeFile(fakePi, `#!/usr/bin/env node\nawait (await import("node:fs/promises")).writeFile(${JSON.stringify(marker)}, "invoked");\n`, "utf8");
+    await fs.chmod(fakePi, 0o755);
     await fs.writeFile(path.join(task, "prompt.md"), "Find the relevant behavior.\n");
     await fs.writeFile(path.join(task, "task.json"), JSON.stringify({
       version: 1, id: "always-passes", title: "Broken grader", promptFile: "prompt.md",
@@ -706,15 +808,16 @@ test("grader negative control aborts before an agent can spend tokens", async ()
     }));
     await fs.writeFile(path.join(task, "grader", "grade.js"),
       'console.log(JSON.stringify({score:1,maxScore:1,passed:true}));\n');
-    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    process.env.MAPBENCH_PI = fakePi;
     await assert.rejects(runBenchmark({
-      repo, taskIds: ["always-passes"], runs: 3, conditions: ["regular-code"], model: "fixed-test-model", timeoutMs: 5_000,
+      repo, taskIds: ["always-passes"], runs: 3, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model", timeoutMs: 5_000,
       dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "results"), tasksRoot: path.join(root, "tasks"),
       pricingMode: "off", seed: "test", debugUsage: false,
     }), /accepted an empty answer/);
     assert.equal(await fs.access(marker).then(() => true, () => false), false);
   } finally {
-    process.env.PATH = previousPath;
+    if (previousPi === undefined) delete process.env.MAPBENCH_PI;
+    else process.env.MAPBENCH_PI = previousPi;
     await fs.rm(root, { recursive: true, force: true });
   }
 });

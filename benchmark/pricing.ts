@@ -84,7 +84,7 @@ export async function fetchOpenRouterPricing(
     warnings.push("OpenRouter did not publish a cached-input price; estimates conservatively use the regular input price for cached tokens.");
   }
   if (Array.isArray(prices.overrides) && prices.overrides.length > 0) {
-    warnings.push("OpenRouter publishes context-length price overrides for this model. Codex reports aggregate turn usage without per-request prompt lengths, so estimates use the model's base token prices.");
+    warnings.push("OpenRouter publishes context-length price overrides for this model. Pi reports aggregate message usage without per-request prompt lengths, so estimates use the model's base token prices.");
   }
   return {
     source: "openrouter",

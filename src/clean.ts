@@ -5,7 +5,7 @@ import type { OutlineOptions } from "./types.js";
 
 export async function cleanOutline(options: OutlineOptions = {}): Promise<string> {
   const root = path.resolve(options.root ?? process.cwd());
-  const out = path.resolve(root, options.out ?? ".project-outline");
+  const out = path.resolve(root, options.out ?? ".cartograph");
   assertSafeOutput(root, out);
   await assertOutputPathHasNoSymlinks(root, out);
   await assertOutputIsManaged(out, root);

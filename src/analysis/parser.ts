@@ -72,18 +72,27 @@ export async function parseProject(detected: DetectedProject): Promise<Normalize
   const pairs = detected.languages.flatMap((language) =>
     detected.files[language].map((fileName) => ({ language, fileName })));
   const files: ParsedFile[] = [];
+  const parseFailures: Array<{ file: string; reason: string }> = [];
   let cursor = 0;
   const workers = Array.from({ length: Math.min(MAX_PARSE_CONCURRENCY, pairs.length) }, async () => {
     while (cursor < pairs.length) {
       const index = cursor++;
       const { language, fileName } = pairs[index];
-      files.push(await parseFile(detected.root, fileName, language));
+      try {
+        files.push(await parseFile(detected.root, fileName, language));
+      } catch (error) {
+        parseFailures.push({
+          file: posixRelative(detected.root, fileName),
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   });
   await Promise.all(workers);
   files.sort((left, right) => compare(left.file, right.file));
+  parseFailures.sort((left, right) => compare(left.file, right.file) || compare(left.reason, right.reason));
   const symbols = files.flatMap((file) => file.symbols).sort((left, right) => compare(left.id, right.id));
   const references = files.flatMap((file) => file.references)
     .sort((left, right) => compare(left.file, right.file) || left.order - right.order);
-  return { root: detected.root, files, symbols, references };
+  return { root: detected.root, files, symbols, references, parseFailures };
 }

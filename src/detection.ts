@@ -22,7 +22,7 @@ function manualHint(): string {
 
 export async function detectProject(options: OutlineOptions = {}): Promise<DetectedProject> {
   const root = path.resolve(options.root ?? process.cwd());
-  const out = path.resolve(root, options.out ?? ".project-outline");
+  const out = path.resolve(root, options.out ?? ".cartograph");
   assertSafeOutput(root, out);
 
   const [typescript, javascript, python, go, rust] = await Promise.all([
@@ -43,6 +43,6 @@ export async function detectProject(options: OutlineOptions = {}): Promise<Detec
 
   const languages = (["typescript", "javascript", "python", "go", "rust"] as const)
     .filter((language) => files[language].length > 0);
-  if (!languages.length) throw new Error(`No supported language was found. project-outline supports TypeScript, JavaScript, Python, Go, and Rust. ${manualHint()}`);
+  if (!languages.length) throw new Error(`No supported language was found. cartograph supports TypeScript, JavaScript, Python, Go, and Rust. ${manualHint()}`);
   return { root, out, languages: [...languages], files };
 }

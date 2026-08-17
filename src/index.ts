@@ -15,6 +15,7 @@ export {
 export { watchOutline } from "./watch.js";
 export { createArchitectureSummary } from "./architecture.js";
 export { createArchitectureMermaid } from "./mermaid.js";
+export { createCallGraphFromIR, createStructuralIR, TOOL_NAME } from "./analysis/ir.js";
 export type {
   CallGraph,
   CallGraphDirection,
@@ -39,3 +40,13 @@ export type {
   SupportedLanguage,
   WatchHandle,
 } from "./types.js";
+export type {
+  StructuralEdge,
+  StructuralEdgeType,
+  StructuralIR,
+  StructuralManifest,
+  StructuralResolution,
+  StructuralSymbol,
+  StructuralSymbolKind,
+  StructuralUnresolved,
+} from "./analysis/types.js";

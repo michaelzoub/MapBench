@@ -99,7 +99,7 @@ export function createLinkedCallGraph(project: NormalizedProject): CallGraph {
   for (const file of project.files) importsByFile.set(file.file, new Map(file.imports.map((item) => [item.local, item])));
 
   const entries = new Map<string, MutableEntry>();
-  for (const symbol of callableSymbols) {
+  for (const symbol of project.symbols) {
     entries.set(symbol.id, {
       file: symbol.file,
       line: symbol.startLine,
@@ -109,7 +109,7 @@ export function createLinkedCallGraph(project: NormalizedProject): CallGraph {
       startByte: symbol.startByte,
       endByte: symbol.endByte,
       kind: symbol.kind as CallGraphEntry["kind"],
-      signature: symbol.signature ?? `${symbol.name}()`,
+      signature: symbol.signature ?? `${symbol.kind} ${symbol.name}`,
       calls: [],
       calledBy: [],
       sourceOrder: [],

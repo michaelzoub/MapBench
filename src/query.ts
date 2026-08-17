@@ -1,5 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { createCallGraphFromIR, createStructuralIRFromDetected } from "./analysis/ir.js";
+import { parseProject } from "./analysis/parser.js";
+import { detectProject } from "./detection.js";
 import type {
   CallGraph,
   CallGraphDirection,
@@ -371,15 +374,18 @@ export function queryCallGraph(graph: CallGraph, query: string, options: Pick<Qu
 
 async function readOutlineCallGraph(options: Pick<QueryOptions, "root" | "out"> = {}): Promise<CallGraph> {
   const root = path.resolve(options.root ?? process.cwd());
-  const out = path.resolve(root, options.out ?? ".project-outline");
-  const file = path.join(out, "callgraph.json");
   try {
-    return JSON.parse(await fs.readFile(file, "utf8")) as CallGraph;
+    const detected = await detectProject({ root, out: options.out });
+    const project = await parseProject(detected);
+    return createCallGraphFromIR(createStructuralIRFromDetected(project, detected));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`Call graph not found at ${file}. Run project-outline generate first.`);
+    const out = path.resolve(root, options.out ?? ".cartograph");
+    const file = path.join(out, "callgraph.json");
+    try {
+      return JSON.parse(await fs.readFile(file, "utf8")) as CallGraph;
+    } catch {
+      throw error;
     }
-    throw error;
   }
 }
 
@@ -398,7 +404,7 @@ function createPreviousUnmarkedEmbeddedQueryScript(): string {
   return `#!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 const query = String(process.argv[2] || "").trim();
-if (!query) { console.error("Usage: node .project-outline/query.mjs <symbol>"); process.exit(2); }
+if (!query) { console.error("Usage: node .cartograph/query.mjs <symbol>"); process.exit(2); }
 const graph = JSON.parse(await readFile(new URL("./callgraph.json", import.meta.url), "utf8"));
 const norm = value => String(value).trim().replace(/\\(\\)$/, "").toLowerCase();
 const target = norm(query);
@@ -443,10 +449,10 @@ function createLegacyEmbeddedQueryScript(): string {
 
 export function createEmbeddedQueryScript(): string {
   return `#!/usr/bin/env node
-// @project-outline generated
+// @cartograph generated
 import { readFile } from "node:fs/promises";
 process.on("uncaughtException", error => {
-  console.error("project-outline query: " + (error instanceof Error ? error.message : String(error)));
+  console.error("cartograph query: " + (error instanceof Error ? error.message : String(error)));
   process.exitCode = 1;
 });
 const graph = JSON.parse(await readFile(new URL("./callgraph.json", import.meta.url), "utf8"));
@@ -527,11 +533,11 @@ const unresolved = (name, query, resolution, extra = {}) => ({
 });
 let result;
 if (operation === "find") {
-  if (positionals.length !== 1) throw new Error("Usage: node .project-outline/query.mjs find <terms> [--limit <1-100>]");
+  if (positionals.length !== 1) throw new Error("Usage: node .cartograph/query.mjs find <terms> [--limit <1-100>]");
   const query = positionals[0].trim(), max = limit(options.limit, 12), matches = ranked(query);
   result = { operation, query, matches: matches.slice(0, max).map(item => reference(item.id)), truncated: matches.length > max };
 } else if (operation === "inspect") {
-  if (positionals.length !== 1) throw new Error("Usage: node .project-outline/query.mjs inspect <symbol> [--limit <1-100>]");
+  if (positionals.length !== 1) throw new Error("Usage: node .cartograph/query.mjs inspect <symbol> [--limit <1-100>]");
   const query = positionals[0].trim(), max = limit(options.limit, 8), resolution = resolve(query, max);
   if (!resolution.id) result = unresolved(operation, query, resolution);
   else {
@@ -542,7 +548,7 @@ if (operation === "find") {
     }, ...(omitted.callers || omitted.callees ? { omitted } : {}), truncated: Boolean(omitted.callers || omitted.callees) };
   }
 } else if (operation === "explore") {
-  if (positionals.length !== 1) throw new Error("Usage: node .project-outline/query.mjs explore <symbol> [--direction <callers|callees|both>] [--depth <0-5>] [--limit <1-100>]");
+  if (positionals.length !== 1) throw new Error("Usage: node .cartograph/query.mjs explore <symbol> [--direction <callers|callees|both>] [--depth <0-5>] [--limit <1-100>]");
   const query = positionals[0].trim(), way = direction(options.direction, "both"), levels = depth(options.depth, 2, 5), max = limit(options.limit, 24);
   const resolution = resolve(query, Math.min(max, 12));
   if (!resolution.id) result = unresolved(operation, query, resolution, { direction: way, depth: levels });
@@ -563,7 +569,7 @@ if (operation === "find") {
       nodes: [...distances].map(([id, distance]) => ({ ...reference(id), distance, ...metadata(graph[id]) })), edges, truncated };
   }
 } else if (operation === "trace") {
-  if (positionals.length !== 2) throw new Error("Usage: node .project-outline/query.mjs trace <from> <to> [--direction <callers|callees|both>] [--max-depth <0-50>]");
+  if (positionals.length !== 2) throw new Error("Usage: node .cartograph/query.mjs trace <from> <to> [--direction <callers|callees|both>] [--max-depth <0-50>]");
   const [from, to] = positionals.map(value => value.trim()), way = direction(options.direction, "callees"), levels = depth(options.maxDepth, 12, 50, "max depth");
   const start = resolve(from), target = resolve(to);
   if (!start.id || !target.id) {
@@ -594,7 +600,7 @@ if (operation === "find") {
     }
   }
 } else {
-  if (positionals.length !== 1) throw new Error("Usage: node .project-outline/query.mjs <symbol>");
+  if (positionals.length !== 1) throw new Error("Usage: node .cartograph/query.mjs <symbol>");
   const query = positionals[0].trim(), target = norm(query);
   if (!query) throw new Error("Query symbol must not be empty.");
   const matches = Object.keys(graph).flatMap(id => {
@@ -622,7 +628,7 @@ export function isManagedEmbeddedQueryScript(contents: string): boolean {
     contents === createPreviousUnmarkedEmbeddedQueryScript() ||
     contents === createPreviousUnmarkedEmbeddedQueryScript().replace(
       "#!/usr/bin/env node\n",
-      "#!/usr/bin/env node\n// @project-outline generated\n",
+      "#!/usr/bin/env node\n// @cartograph generated\n",
     ) ||
     contents === createLegacyEmbeddedQueryScript();
 }
