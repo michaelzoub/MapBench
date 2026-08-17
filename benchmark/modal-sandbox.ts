@@ -96,6 +96,24 @@ async function checkedModalCommand(sandbox: Sandbox, command: string[], timeoutM
   if (result.exitCode !== 0) throw new Error(`Modal Sandbox command failed (${result.exitCode}): ${result.stderr || result.stdout}`);
 }
 
+export async function terminateModalSandbox(sandbox: Sandbox, attempts = 3): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await sandbox.terminate({ wait: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        const delay = Promise.withResolvers<void>();
+        setTimeout(delay.resolve, 100 * (attempt + 1));
+        await delay.promise;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function temporaryArchive(label: string): Promise<{ directory: string; file: string }> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), `mapbench-modal-${label}-`));
   return { directory, file: path.join(directory, "workspace.tar") };

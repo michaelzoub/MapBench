@@ -38,6 +38,7 @@ class LocalSandbox {
   readonly sandboxId: string;
   readonly root: string;
   terminated = 0;
+  terminateFailures = 0;
   readonly copiedIn: string[] = [];
   readonly filesystem: {
     copyFromLocal: (local: string, remote: string) => Promise<void>;
@@ -108,6 +109,10 @@ class LocalSandbox {
   }
 
   async terminate(): Promise<number> {
+    if (this.terminateFailures > 0) {
+      this.terminateFailures -= 1;
+      throw new Error("injected termination failure");
+    }
     this.terminated += 1;
     return 0;
   }
@@ -461,6 +466,24 @@ test("Modal backend terminates an allocated sandbox when workspace upload fails"
     await assert.rejects(backend.startAgentSandbox(execution, root, "failure"), /injected upload failure/);
     assert.equal(runtime.sandboxes.length, 1);
     assert.equal(runtime.sandboxes[0].terminated, 1);
+  } finally {
+    await Promise.all(runtime.sandboxes.map((sandbox) => fs.rm(sandbox.root, { recursive: true, force: true })));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+test("Modal agent cleanup retries transient termination failures", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mapbench-modal-retry-"));
+  const runtime = new LocalModalRuntime();
+  try {
+    await fs.writeFile(path.join(root, "source.ts"), "source\n");
+    const backend = new ModalExecutionBackend(runtime.settings, 1, runtime as unknown as ModalSandboxRuntime);
+    const agent = await backend.startAgentSandbox(execution, root, "retry");
+    const sandbox = runtime.sandboxes[0];
+    sandbox.terminateFailures = 1;
+    await agent.stop();
+    assert.equal(sandbox.terminated, 1);
+    await agent.stop();
+    assert.equal(sandbox.terminated, 1);
   } finally {
     await Promise.all(runtime.sandboxes.map((sandbox) => fs.rm(sandbox.root, { recursive: true, force: true })));
     await fs.rm(root, { recursive: true, force: true });

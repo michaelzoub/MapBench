@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Sandbox } from "modal";
-import { MODAL_SDK_VERSION, ModalSandboxRuntime, downloadDirectoryFromModal, uploadDirectoryToModal } from "./modal-sandbox.js";
+import { MODAL_SDK_VERSION, ModalSandboxRuntime, downloadDirectoryFromModal, terminateModalSandbox, uploadDirectoryToModal } from "./modal-sandbox.js";
 import { runProcess } from "./process.js";
 import type {
   BenchmarkOptions,
@@ -168,7 +168,7 @@ export class ModalExecutionBackend implements ExecutionBackend {
       await fs.rm(workspace, { recursive: true, force: true });
       throw error;
     } finally {
-      if (sandbox) await sandbox.terminate({ wait: true }).catch(() => undefined);
+      if (sandbox) await terminateModalSandbox(sandbox);
     }
   }
 
@@ -183,10 +183,11 @@ export class ModalExecutionBackend implements ExecutionBackend {
     try {
       await uploadDirectoryToModal(sandbox, workspace, "/app");
     } catch (error) {
-      await sandbox.terminate({ wait: true }).catch(() => undefined);
+      await terminateModalSandbox(sandbox);
       throw error;
     }
     let stopped = false;
+    let stopPromise: Promise<void> | undefined;
     return {
       metadata: { ...this.metadata(execution), sandboxId: sandbox.sandboxId },
       piEnvironment: {
@@ -200,8 +201,13 @@ export class ModalExecutionBackend implements ExecutionBackend {
       },
       async stop() {
         if (stopped) return;
-        stopped = true;
-        await sandbox.terminate({ wait: true }).catch(() => undefined);
+        stopPromise ??= terminateModalSandbox(sandbox).then(() => {
+          stopped = true;
+        }, (error) => {
+          stopPromise = undefined;
+          throw error;
+        });
+        await stopPromise;
       },
     };
   }

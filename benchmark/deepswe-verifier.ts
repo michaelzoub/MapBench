@@ -7,6 +7,7 @@ import {
   execModalCommand,
   modalOptionsFromEnvironment,
   ModalSandboxRuntime,
+  terminateModalSandbox,
 } from "./modal-sandbox.js";
 import { runProcess } from "./process.js";
 
@@ -149,8 +150,11 @@ async function runModalVerifier(options: VerifierOptions, tests: string, output:
       },
     };
   } finally {
-    if (sandbox) await sandbox.terminate({ wait: true }).catch(() => undefined);
-    runtime.close();
+    try {
+      if (sandbox) await terminateModalSandbox(sandbox);
+    } finally {
+      runtime.close();
+    }
   }
 }
 
