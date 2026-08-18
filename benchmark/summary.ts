@@ -51,6 +51,7 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
     const condition = normalizeCondition(run.condition);
     return condition === run.condition ? run : { ...run, condition };
   });
+  const smoke = runs.length > 0 && runs.every((run) => run.smoke === true);
   const pairKey = (run: RunResult) => `${run.taskId}\0${run.pairId}`;
   const rawByPair = new Map(runs.filter((run) => run.condition === "regular-code").map((run) => [pairKey(run), run]));
   const conditionOrder = [...DEFAULT_CONDITIONS, ...CONDITIONS.filter((condition) => !DEFAULT_CONDITIONS.includes(condition))];
@@ -105,18 +106,21 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
       ? null
       : condition.tokensMean.total - full.tokensMean.total,
   })) : [];
+  const tasks = [...new Set(runs.map((run) => run.taskId))].sort();
   const active = new Set(conditions.map((item) => item.condition));
   const missing = DEFAULT_CONDITIONS.filter((condition) => !active.has(condition));
-  const tasks = [...new Set(runs.map((run) => run.taskId))].sort();
+  const repetitionsRequired = smoke ? 1 : 3;
   const underReplicated = tasks.some((taskId) => conditions.some(({ condition }) =>
-    runs.filter((run) => run.taskId === taskId && run.condition === condition).length < 3));
+    runs.filter((run) => run.taskId === taskId && run.condition === condition).length < repetitionsRequired));
   const warnings = [
+    ...(smoke ? ["Smoke mode is infrastructure validation only; results are not publication-quality experimental measurements."] : []),
     ...(missing.length ? [`Incomplete targeted comparison: missing ${missing.map((condition) => CONDITION_LABELS[condition]).join(", ")}.`] : []),
-    ...(underReplicated ? ["Fewer than three repetitions are available for at least one task-condition cell; means are incomplete."] : []),
+    ...(underReplicated ? [`Fewer than ${repetitionsRequired} repetition${repetitionsRequired === 1 ? "" : "s"} are available for at least one task-condition cell; means are incomplete.`] : []),
   ];
   return {
     schemaVersion: 2,
     generatedAt,
+    smoke,
     tasks,
     totalRuns: runs.length,
     warnings,

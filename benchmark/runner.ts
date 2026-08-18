@@ -229,6 +229,7 @@ async function executeRun(
     : undefined;
   const result: RunResult = {
     schemaVersion: 3,
+    smoke: options.smoke === true,
     pairId,
     taskId: task.id,
     condition,
@@ -382,8 +383,11 @@ export async function runBenchmark(
   preloadedTasks?: LoadedTask[],
   backendOverride?: ExecutionBackend,
 ): Promise<{ resultsRoot: string; plan: PlanItem[]; runs: RunResult[]; pricing: PricingResolution }> {
-  if (options.runs !== BENCHMARK_REPETITIONS) {
-    throw new Error(`Benchmark repetitions are fixed at ${BENCHMARK_REPETITIONS}; received ${options.runs}.`);
+  const expectedRepetitions = options.smoke === true ? 1 : BENCHMARK_REPETITIONS;
+  if (options.runs !== expectedRepetitions) {
+    throw new Error(options.smoke === true
+      ? `Smoke benchmarks require exactly 1 repetition; received ${options.runs}.`
+      : `Benchmark repetitions are fixed at ${BENCHMARK_REPETITIONS}; received ${options.runs}.`);
   }
   const backendConfiguration = validateExecutionBackendOptions(options);
   const deepSwe = Boolean(options.deepSweCheckout);
@@ -486,6 +490,7 @@ export async function runBenchmark(
       conditionFactors: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_FACTORS[condition]])),
       conditionLabels: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_LABELS[condition]])),
       conditionComponents: Object.fromEntries(options.conditions.map((condition) => [condition, COMPONENTS[condition]])),
+      smoke: options.smoke === true,
       runs: options.runs,
       aggregation: "per-task paired arithmetic mean, then equal-weight task mean",
       pairingKey: "(taskId, repetition)",

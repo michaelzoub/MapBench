@@ -83,12 +83,12 @@ The default comparison uses three fresh runs for each of five conditions:
 | Condition | Mapping aid available |
 |---|---|
 | `regular-code` | None |
-| `outline-only` | Architecture index |
+| `outline-only` | Architecture index (`architecture.md`) |
 | `skeleton-only` | Declaration skeleton |
 | `callgraph-only` | Queryable call graph |
 | `all-outline-aids` | Full MapBench: all three mapping aids |
 
-Use `--conditions factorial` for the three intermediate multi-artifact combinations as well. The Mermaid view is for humans and is not a benchmark treatment.
+Use `--conditions factorial` for the three intermediate multi-artifact combinations as well. The Mermaid view is for humans and is not a benchmark treatment. `--smoke` is an explicit infrastructure-validation mode: it runs exactly one repetition, is not publication-quality, and does not change Modal concurrency or isolation.
 
 ```bash
 # Validate task discovery and the complete plan without invoking Pi.
@@ -105,6 +105,8 @@ bun run benchmark:test
 
 # Dry-run the pinned DeepSWE smoke set through the Pi + Docker coding harness.
 bun run benchmark --deepswe ../deep-swe --task-set smoke --pricing off --dry-run
+# Intended one-task DeepSWE smoke plan: 1 task × 5 targeted conditions × 1 repetition = 5 Pi runs.
+bun run benchmark --deepswe ../deep-swe --task abs-module-cache-flags --conditions targeted --smoke --backend modal --concurrency 1 --pricing off --dry-run
 
 # Run the same bounded set with up to four independent cells on Modal.
 bun run benchmark --deepswe ../deep-swe --task-set smoke --backend modal --concurrency 4 --pricing off

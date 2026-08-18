@@ -156,6 +156,17 @@ test("condition presets select targeted defaults or the optional factorial", () 
   assert.throws(() => parseConditionSelection("guidance-only"), /Unknown benchmark condition/);
   assert.throws(() => parseConditionSelection("no-agents"), /Unknown benchmark condition/);
 });
+test("CLI rejects invalid smoke and runs combinations", async () => {
+  await assert.rejects(
+    runBenchmarkCli(["--deepswe", "/unused/deep-swe", "--task", "task", "--smoke", "--runs", "3"]),
+    /--smoke requires --runs 1/,
+  );
+  await assert.rejects(
+    runBenchmarkCli(["--deepswe", "/unused/deep-swe", "--task", "task", "--runs", "1"]),
+    /--runs must be exactly 3/,
+  );
+});
+
 
 test("legacy result IDs project onto the current artifact-only conditions", () => {
   const legacy = { ...fakeRun("regular-code", "legacy", 1), condition: "no-callgraph" as Condition };
@@ -783,6 +794,16 @@ process.exitCode = passed ? 0 : 1;
     assert.equal(config.tasksRoot, tasksRoot);
     assert.equal(config.graderPreflight.behavior.details.passed, false);
     assert.equal(await fs.access(path.join(completed.resultsRoot, "report.html")).then(() => true, () => false), true);
+    const smoke = await runBenchmark({
+      repo, taskIds: ["behavior"], runs: 1, smoke: true, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model", timeoutMs: 5_000,
+      dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "smoke-results"), tasksRoot,
+      pricingMode: "off", seed: "test", debugUsage: false,
+    });
+    assert.equal(smoke.runs.length, 1);
+    assert.equal(smoke.runs[0].smoke, true);
+    assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "config.json"), "utf8")).smoke, true);
+    assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "summary.json"), "utf8")).smoke, true);
+    assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "regular-code", "behavior", "run-001", "result.json"), "utf8")).smoke, true);
   } finally {
     if (previousPi === undefined) delete process.env.MAPBENCH_PI;
     else process.env.MAPBENCH_PI = previousPi;

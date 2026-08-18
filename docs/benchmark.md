@@ -9,7 +9,7 @@ MapBench tests whether a specific generated mapping aid changes correctness or n
 | Task | One stable prompt, manifest, and private grader under `tasks/<id>/` |
 | Condition | The exact subset of generated mapping aids placed in the workspace |
 | Cell | One task × condition combination |
-| Repetition | One fresh Pi process and sanitized workspace for a cell; exactly three are required |
+| Repetition | One fresh Pi process and sanitized workspace for a cell; exactly three are required in normal mode and exactly one in `--smoke` mode |
 | Pair | Runs sharing a task and repetition number across conditions, used for wins/losses/ties |
 
 ## Run a benchmark
@@ -44,7 +44,23 @@ bun run benchmark:report --results benchmark-results/<timestamp>
 bun run benchmark:regrade --results benchmark-results/<timestamp>
 ```
 
-`--dry-run` validates pricing mode, repository commit, task manifests, prompts, condition selection, randomized execution order, and Pi/grader command plans. It does not create benchmark workspaces or run the empty-answer grader preflight.
+`--smoke` is an explicit infrastructure-validation mode. It changes only the repetition count: normal mode remains fixed at three repetitions, while smoke mode requires exactly one. The default `targeted` preset remains the five conditions (regular code, architecture map only, skeleton only, call graph only, and all three aids). `factorial` remains an explicit eight-condition option for later interaction-effect experiments; it is not the smoke default.
+
+For the intended one-task DeepSWE smoke check:
+
+```bash
+bun run benchmark \
+  --deepswe ../deep-swe \
+  --task abs-module-cache-flags \
+  --conditions targeted \
+  --smoke \
+  --backend modal \
+  --concurrency 1 \
+  --pricing off \
+  --dry-run
+```
+
+This plans exactly five cells (one task × five conditions × one repetition) and therefore five Pi runs. `--dry-run` prints the selected tasks, conditions, repetitions, backend concurrency, and `totalPlannedCells` before execution. Smoke results are marked with `smoke: true` in `config.json`, `summary.json`, and every persisted `result.json`; they are not publication-quality measurements.
 
 ## Execution and isolation
 

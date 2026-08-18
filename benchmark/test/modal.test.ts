@@ -188,13 +188,19 @@ function loadedTask(id: string): LoadedTask {
   };
 }
 
-function dryOptions(backend: "docker" | "modal", outputRoot: string): BenchmarkOptions {
+function dryOptions(
+  backend: "docker" | "modal",
+  outputRoot: string,
+  smoke = false,
+  conditions: BenchmarkOptions["conditions"] = ["regular-code", "outline-only", "callgraph-only", "skeleton-only", "all-outline-aids"],
+): BenchmarkOptions {
   return {
     repo: "",
     deepSweCheckout: "/unused/pinned-deepswe",
     taskIds: ["task-a", "task-b"],
-    runs: 3,
-    conditions: ["regular-code", "outline-only", "callgraph-only", "skeleton-only", "all-outline-aids"],
+    runs: smoke ? 1 : 3,
+    smoke,
+    conditions,
     provider: "openai-codex",
     model: "fixed",
     timeoutMs: 60_000,
@@ -511,8 +517,43 @@ test("Docker and Modal dry plans preserve treatment, task pairing, and task-cent
       cellCounts.set(cell, (cellCounts.get(cell) ?? 0) + 1);
     }
     assert.equal([...pairCounts.values()].every((count) => count === 5), true);
+
     assert.equal([...cellCounts.values()].every((count) => count === 3), true);
     assert.equal(await fs.stat(modal.resultsRoot).then(() => true, () => false), false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+test("smoke plans one repetition per selected condition and supports explicit factorial", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mapbench-smoke-plan-"));
+  try {
+    const task = loadedTask("task-a");
+    const targeted = await runBenchmark({ ...dryOptions("modal", root, true), taskIds: ["task-a"] }, [task]);
+    assert.equal(targeted.plan.length, 5);
+    assert.equal(new Set(targeted.plan.map((item) => item.condition)).size, 5);
+    assert.equal(new Set(targeted.plan.map((item) => item.run)).size, 1);
+    const factorial = await runBenchmark(
+      { ...dryOptions("modal", root, true, ["regular-code", "outline-only", "skeleton-only", "callgraph-only", "outline-skeleton", "outline-callgraph", "skeleton-callgraph", "all-outline-aids"]), taskIds: ["task-a"] },
+      [task],
+    );
+    assert.equal(factorial.plan.length, 8);
+    assert.equal(new Set(factorial.plan.map((item) => item.condition)).size, 8);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("benchmark repetition validation preserves normal three-run mode", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mapbench-repetition-validation-"));
+  try {
+    await assert.rejects(
+      runBenchmark({ ...dryOptions("modal", root), runs: 1 }, [loadedTask("task-a")]),
+      /Benchmark repetitions are fixed at 3/,
+    );
+    await assert.rejects(
+      runBenchmark({ ...dryOptions("modal", root, true), runs: 3 }, [loadedTask("task-a")]),
+      /Smoke benchmarks require exactly 1 repetition/,
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

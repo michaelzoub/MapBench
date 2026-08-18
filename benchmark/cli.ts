@@ -32,7 +32,8 @@ Options:
   --tasks <path>            Bundled task root (default: top-level tasks/)
   --list-tasks              List task IDs for the selected source and exit
   --all                     Run every task; required explicitly for all DeepSWE tasks
-  --runs <n>                Must be 3; every task-condition cell has exactly 3 fresh runs
+  --runs <n>                Normal mode requires 3; with --smoke, requires 1
+  --smoke                   Infrastructure-validation mode: exactly 1 repetition
   --conditions <csv|preset> Conditions (default: targeted; presets: targeted, factorial)
   --provider <provider>     Fixed Pi provider (default: openai-codex)
   --model <model>           Fixed Pi model (default: gpt-5.6-terra)
@@ -46,7 +47,7 @@ Options:
   --pricing <mode>          Live pricing mode: openrouter or off (default: openrouter)
   --pricing-model <id>      OpenRouter author/slug when it differs from --model
   --timeout <seconds>       Pi timeout per run (default: 1800)
-  --dry-run                 Validate and print the complete plan without invoking Pi
+  --dry-run                 Print tasks, conditions, repetitions, concurrency, and total planned cells; do not invoke Pi
   --debug-usage             Save raw assistant usage events beside each result
   --keep-workspaces         Retain disposable clones
   --output <path>           Results parent (default: benchmark-results)
@@ -231,7 +232,7 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   if (args.includes("--help") || args.includes("-h")) { process.stdout.write(HELP); return; }
   const bundledTasksRoot = resolveBundledTasksRoot(import.meta.dirname);
   const options: BenchmarkOptions = {
-    repo: "", taskIds: [], runs: BENCHMARK_REPETITIONS, conditions: [...DEFAULT_CONDITIONS], provider: DEFAULT_BENCHMARK_PROVIDER, model: DEFAULT_BENCHMARK_MODEL, timeoutMs: 1_800_000,
+    repo: "", taskIds: [], runs: BENCHMARK_REPETITIONS, smoke: false, conditions: [...DEFAULT_CONDITIONS], provider: DEFAULT_BENCHMARK_PROVIDER, model: DEFAULT_BENCHMARK_MODEL, timeoutMs: 1_800_000,
     dryRun: false, keepWorkspaces: false, outputRoot: path.resolve("benchmark-results"), tasksRoot: bundledTasksRoot,
     backend: "docker", concurrency: 1, modal: { appName: "mapbench" }, pricingMode: "openrouter", debugUsage: false,
   };
@@ -239,14 +240,16 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   let example = "";
   let list = false;
   let timeoutSet = false;
+  let runsSet = false;
   const taskSets: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index].split("=", 1)[0];
-    if (["--dry-run", "--debug-usage", "--keep-workspaces", "--all", "--list-tasks"].includes(flag)) {
+    if (["--dry-run", "--debug-usage", "--keep-workspaces", "--all", "--list-tasks", "--smoke"].includes(flag)) {
       if (flag === "--dry-run") options.dryRun = true;
       else if (flag === "--debug-usage") options.debugUsage = true;
       else if (flag === "--keep-workspaces") options.keepWorkspaces = true;
       else if (flag === "--list-tasks") list = true;
+      else if (flag === "--smoke") options.smoke = true;
       else all = true;
       continue;
     }
@@ -259,9 +262,8 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
     else if (flag === "--example") example = input;
     else if (flag === "--deepswe") options.deepSweCheckout = path.resolve(input);
     else if (flag === "--task") options.taskIds.push(input);
-    else if (flag === "--task-set") taskSets.push(input);
+    else if (flag === "--runs") { options.runs = Number(input); runsSet = true; }
     else if (flag === "--tasks") options.tasksRoot = path.resolve(input);
-    else if (flag === "--runs") options.runs = Number(input);
     else if (flag === "--conditions") options.conditions = parseConditionSelection(input);
     else if (flag === "--provider") options.provider = input;
     else if (flag === "--model") options.model = input;
@@ -314,8 +316,12 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
 
   if (options.backend === "modal" && !options.deepSweCheckout) throw new Error("--backend modal requires --deepswe.");
   if (options.backend === "docker" && options.concurrency !== 1) throw new Error("--concurrency greater than 1 requires --backend modal.");
-  if (!Number.isInteger(options.concurrency) || options.concurrency! < 1 || options.concurrency! > 32) throw new Error("--concurrency must be an integer from 1 to 32.");
-  if (options.runs !== BENCHMARK_REPETITIONS) throw new Error(`--runs must be exactly ${BENCHMARK_REPETITIONS}.`);
+  if (options.smoke) {
+    if (runsSet && options.runs !== 1) throw new Error("--smoke requires --runs 1; normal mode requires exactly 3.");
+    options.runs = 1;
+  } else if (options.runs !== BENCHMARK_REPETITIONS) {
+    throw new Error(`--runs must be exactly ${BENCHMARK_REPETITIONS}; use --smoke for a one-repetition infrastructure check.`);
+  }
   const missingConditions = DEFAULT_CONDITIONS.filter((condition) => !options.conditions.includes(condition));
   if (missingConditions.length) process.stderr.write(`benchmark: warning: incomplete targeted comparison; missing conditions: ${missingConditions.join(", ")}\n`);
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) throw new Error("--timeout must be positive.");
@@ -336,11 +342,13 @@ export async function runBenchmarkCli(inputArgs = process.argv.slice(2)): Promis
   if (options.dryRun) {
     process.stdout.write(`${JSON.stringify({
       dryRun: true,
+      smoke: options.smoke === true,
       targetRepository: options.deepSweCheckout ? null : options.repo,
       deepSweCheckout: options.deepSweCheckout,
       tasks: options.taskIds,
       conditions: options.conditions,
       runs: options.runs,
+      totalPlannedCells: result.plan.length,
       provider: options.provider,
       model: options.model,
       thinking: DEFAULT_BENCHMARK_THINKING,

@@ -248,6 +248,7 @@ export interface ExecutionBackendMetadata {
 
 export interface RunResult {
   schemaVersion: 2 | 3;
+  smoke?: boolean;
   pairId: string;
   taskId: string;
   condition: Condition;
@@ -320,6 +321,7 @@ export interface BenchmarkOptions {
   repo: string;
   taskIds: string[];
   runs: number;
+  smoke?: boolean;
   conditions: Condition[];
   provider: string;
   model: string;
@@ -357,6 +359,7 @@ export interface SummaryCondition {
 export interface BenchmarkSummary {
   schemaVersion: 2;
   generatedAt: string;
+  smoke: boolean;
   tasks: string[];
   totalRuns: number;
   warnings?: string[];
@@ -371,3 +374,4 @@ export interface BenchmarkSummary {
   }>;
   runs: RunResult[];
 }
+
