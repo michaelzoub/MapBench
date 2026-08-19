@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { runProcess } from "../process.js";
 import { DEFAULT_BENCHMARK_THINKING, isolatedPiEnvironment, piCommand, runBenchmark } from "../runner.js";
 import { scaffoldEvalTask } from "../scaffold.js";
 import { buildSummary } from "../summary.js";
+import { buildTrialTelemetry, deriveBehavioralTelemetry } from "../telemetry.js";
 import type { CheckResult, Condition, GraderResult, RunResult, TokenUsage } from "../types.js";
 import { CONDITION_FACTORS, CONDITIONS, DEFAULT_CONDITIONS } from "../types.js";
 import { assertGraderOutsideWorkspace, commitBaseline, COMPONENTS, conditionInstructions, createWorkspace, prepareCondition, removeDockerWorkspace, removePrivateTaskFromWorkspace, startDockerWorkspace } from "../workspace.js";
@@ -45,17 +47,24 @@ const tokenUsage = (overrides: Partial<TokenUsage> = {}): TokenUsage => ({
 });
 
 function fakeRun(condition: Condition, pairId: string, score: number, overrides: Partial<RunResult> = {}): RunResult {
-  return {
-    schemaVersion: 3, pairId, taskId: "task", condition, run: 1, targetCommit: "a", baselineCommit: "b",
+  const base: RunResult = {
+    schemaVersion: 4, pairId, taskId: "task", condition, run: 1, targetCommit: "a", baselineCommit: "b",
     baselineTreeHash: "tree", promptSha256: "prompt", provider: "openai-codex", model: "fixed",
+    trial: { taskId: "task", condition, repetition: 1, model: "fixed", provider: "openai-codex", backend: "docker", harness: "pi", repoCommit: "a", configurationSha256: "config", promptSha256: "prompt" },
     status: "completed", exitCode: 0, durationMs: 1000, tokens: tokenUsage(),
+    telemetry: buildTrialTelemetry({ modelTurns: 0, toolCalls: 0, sourceFileReads: 0, artifactReads: 0, graphQueries: 0, searches: 0, edits: 0, shellCommands: 0, failedToolCalls: 0 }, tokenUsage(), grader(score), 1000),
     estimatedCostUsd: 0.01, commands: [], commandCount: 2, failedCommandCount: 0, finalResponse: "done", filesChanged: ["src/a.ts"], fileCount: 1,
     navigation: emptyNavigationMetrics(),
     hiddenGrader: grader(score), checks: { regression: passCheck, typecheck: passCheck, build: passCheck }, artifactDirectory: "regular-code/task/run-001", workspaceKept: false,
     isolation: { harness: "pi", freshProcess: true, resumedSession: false, ephemeralSession: true, freshWorkspace: true,
       originalGitObjectsRemoved: true, piHome: "fresh-auth-only", initialPiHomeFiles: ["auth.json"], piHomeRemoved: true,
       contextFiles: "disabled", resources: "explicit-extension-only", tools: "workspace-read-only" },
-    ...overrides,
+  };
+  const merged = { ...base, ...overrides };
+  return {
+    ...merged,
+    trial: overrides.trial ?? { ...base.trial, condition: merged.condition, repetition: merged.run },
+    telemetry: overrides.telemetry ?? buildTrialTelemetry(base.telemetry, merged.tokens, merged.hiddenGrader, merged.durationMs),
   };
 }
 
@@ -88,7 +97,7 @@ test("workspace materializes the exact commit, removes its original object datab
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test("treatments expose only isolated .mapbench artifacts and matching instructions", { timeout: 20_000 }, async () => {
+test("treatments expose only isolated .mapbench artifacts and minimal matching discovery instructions", { timeout: 20_000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-ablation-"));
   try {
     const { repo, commit } = await makeGitRepository(root);
@@ -114,13 +123,22 @@ test("treatments expose only isolated .mapbench artifacts and matching instructi
       assert.equal(prepared.callgraphHelper !== null, components.callgraph);
       assert.equal(await fs.access(path.join(privateDirectory, "callgraph.json")).then(() => true, () => false), components.callgraph);
       const instructions = conditionInstructions(condition);
-      if (components.architecture) assert.match(instructions, /architecture\.md/);
-      else assert.doesNotMatch(instructions, /architecture\.md/);
-      if (components.skeleton) assert.match(instructions, /skeleton/);
-      else assert.doesNotMatch(instructions, /skeleton/);
-      if (components.callgraph) assert.match(instructions, /mapbench_query/);
-      else assert.doesNotMatch(instructions, /mapbench_query/);
-      assert.match(instructions, /complete real repository source/);
+      assert.match(instructions, /Use the available repository information as you judge useful for completing the task\.$/);
+      const separator = instructions.lastIndexOf("\n\n");
+      const availability = separator === -1 ? "" : instructions.slice(0, separator);
+      if (components.architecture) assert.match(availability, /Architecture: `\.mapbench\/architecture\.md` is available\./);
+      else assert.doesNotMatch(availability, /architecture\.md/i);
+      if (components.skeleton) assert.match(availability, /Skeleton: `\.mapbench\/skeleton\/` is available\./);
+      else assert.doesNotMatch(availability, /skeleton/i);
+      if (components.callgraph) assert.match(availability, /Call graph: `mapbench_query` is available\./);
+      else assert.doesNotMatch(availability, /mapbench_query|call graph/i);
+      if (!components.architecture && !components.skeleton && !components.callgraph) {
+        assert.equal(instructions, "Use the available repository information as you judge useful for completing the task.");
+        assert.equal(availability, "");
+      } else {
+        assert.match(availability, /^The following generated repository-structure aids are available:/);
+      }
+      assert.doesNotMatch(availability, /\b(?:read|use|inspect|required?|must|should|navigate|verify|prefer|strategy)\b/i);
     }
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
@@ -384,6 +402,136 @@ test("Pi JSONL parsing accounts for tokens, reasoning, tool calls, and failures"
   assert.equal(estimateCost(parsed.tokens, { inputPerMillion: 10, cachedInputPerMillion: 2, outputPerMillion: 20, reasoningPerMillion: 999 }), 0.00128);
 });
 
+test("shared Pi telemetry classifies every behavioral counter once and retains unfinished calls", () => {
+  const raw = [
+    { type: "message_end", message: { role: "assistant", content: [] } },
+    { type: "tool_execution_start", toolCallId: "source", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_start", toolCallId: "source", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "source", toolName: "read", result: { content: [{ type: "text", text: "many chunks do not matter" }] }, isError: false },
+    { type: "tool_execution_end", toolCallId: "source", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "artifact", toolName: "read", args: { path: ".mapbench/skeleton/src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "artifact", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "graph", toolName: "mapbench_query", args: { operation: "find", query: "main" } },
+    { type: "tool_execution_end", toolCallId: "graph", toolName: "mapbench_query", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "search", toolName: "grep", args: { pattern: "main", path: "src" } },
+    { type: "tool_execution_end", toolCallId: "search", toolName: "grep", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "edit", toolName: "edit", args: { path: "src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "edit", toolName: "edit", result: {}, isError: true },
+    { type: "tool_execution_end", toolCallId: "edit", toolName: "edit", result: {}, isError: true },
+    { type: "tool_execution_start", toolCallId: "shell", toolName: "bash", args: { command: "cat src/other.ts; sed -i 's/a/b/' src/other.ts" } },
+    { type: "tool_execution_end", toolCallId: "shell", toolName: "bash", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "unfinished", toolName: "write", args: { path: "src/new.ts" } },
+    { type: "tool_execution_end", toolCallId: "end-only", toolName: "ls", result: {}, isError: false },
+    { type: "message_end", message: { role: "assistant", content: [] } },
+    { type: "message_end", message: { role: "user", content: [] } },
+  ].map((event, index) => ({ line: index + 1, event }));
+
+  assert.deepEqual(deriveBehavioralTelemetry(raw), {
+    modelTurns: 2,
+    toolCalls: 8,
+    sourceFileReads: 2,
+    artifactReads: 1,
+    graphQueries: 1,
+    searches: 1,
+    edits: 3,
+    shellCommands: 1,
+    failedToolCalls: 1,
+  });
+});
+
+test("Pi access telemetry preserves chronology, success, deduplication, and independent graph use", () => {
+  const raw = [
+    { type: "tool_execution_start", toolCallId: "source-1", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "source-1", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "source-2", toolName: "read", args: { path: "./src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "source-2", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "artifact-failed", toolName: "read", args: { path: ".mapbench/architecture.md" } },
+    { type: "tool_execution_end", toolCallId: "artifact-failed", toolName: "read", result: {}, isError: true },
+    { type: "tool_execution_start", toolCallId: "artifact-1", toolName: "read", args: { path: ".mapbench/skeleton/src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "artifact-1", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "artifact-2", toolName: "read", args: { path: ".mapbench/skeleton/src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "artifact-2", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "other", toolName: "read", args: { path: "README.md" } },
+    { type: "tool_execution_end", toolCallId: "other", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_start", toolCallId: "graph-failed", toolName: "mapbench_query", args: { operation: "find", query: "main" } },
+    { type: "tool_execution_end", toolCallId: "graph-failed", toolName: "mapbench_query", result: {}, isError: true },
+    { type: "tool_execution_start", toolCallId: "graph-ok", toolName: "mapbench_query", args: { operation: "inspect", query: "main" } },
+    { type: "tool_execution_end", toolCallId: "graph-ok", toolName: "mapbench_query", result: {}, isError: false },
+  ];
+  const parsed = parsePiEvents(raw.map((event) => JSON.stringify(event)).join("\n"), raw.map((_, index) => (index + 1) * 10));
+  assert.deepEqual(parsed.accessTelemetry.accesses, [
+    { path: "src/main.ts", kind: "source", tool: "read", eventIndex: 0, elapsedMs: 10, status: "succeeded", success: true },
+    { path: "src/main.ts", kind: "source", tool: "read", eventIndex: 2, elapsedMs: 30, status: "succeeded", success: true },
+    { path: ".mapbench/architecture.md", kind: "artifact", tool: "read", eventIndex: 4, elapsedMs: 50, status: "failed", success: false },
+    { path: ".mapbench/skeleton/src/main.ts", kind: "artifact", tool: "read", eventIndex: 6, elapsedMs: 70, status: "succeeded", success: true },
+    { path: ".mapbench/skeleton/src/main.ts", kind: "artifact", tool: "read", eventIndex: 8, elapsedMs: 90, status: "succeeded", success: true },
+    { path: "README.md", kind: "other", tool: "read", eventIndex: 10, elapsedMs: 110, status: "succeeded", success: true },
+    { path: "mapbench_query", kind: "other", tool: "mapbench_query", eventIndex: 12, elapsedMs: 130, status: "failed", success: false },
+    { path: "mapbench_query", kind: "other", tool: "mapbench_query", eventIndex: 14, elapsedMs: 150, status: "succeeded", success: true },
+  ]);
+  assert.deepEqual(parsed.accessTelemetry.failedAccesses.map(({ path }) => path), [".mapbench/architecture.md", "mapbench_query"]);
+  assert.deepEqual(parsed.accessTelemetry.incompleteAccesses, []);
+  assert.deepEqual(parsed.accessTelemetry.openedFiles, [
+    "src/main.ts", "src/main.ts", ".mapbench/skeleton/src/main.ts", ".mapbench/skeleton/src/main.ts", "README.md",
+  ]);
+  assert.deepEqual({
+    uniqueSourceFilesOpened: parsed.accessTelemetry.uniqueSourceFilesOpened,
+    uniqueArtifactFilesOpened: parsed.accessTelemetry.uniqueArtifactFilesOpened,
+    sourceFileReadCount: parsed.accessTelemetry.sourceFileReadCount,
+    artifactReadCount: parsed.accessTelemetry.artifactReadCount,
+    artifactUsed: parsed.accessTelemetry.artifactUsed,
+    failedSourceFileReadCount: parsed.accessTelemetry.failedSourceFileReadCount,
+    failedArtifactReadCount: parsed.accessTelemetry.failedArtifactReadCount,
+    firstArtifactAccessEvent: parsed.accessTelemetry.firstArtifactAccessEvent,
+    firstArtifactAccessMs: parsed.accessTelemetry.firstArtifactAccessMs,
+    graphQueryCount: parsed.accessTelemetry.graphQueryCount,
+    successfulGraphQueryCount: parsed.accessTelemetry.successfulGraphQueryCount,
+    failedGraphQueryCount: parsed.accessTelemetry.failedGraphQueryCount,
+    firstGraphQueryEvent: parsed.accessTelemetry.firstGraphQueryEvent,
+    firstGraphQueryMs: parsed.accessTelemetry.firstGraphQueryMs,
+  }, {
+    uniqueSourceFilesOpened: 1, uniqueArtifactFilesOpened: 1, sourceFileReadCount: 2, artifactReadCount: 2,
+    artifactUsed: true, failedSourceFileReadCount: 0, failedArtifactReadCount: 1,
+    firstArtifactAccessEvent: 4, firstArtifactAccessMs: 50,
+    graphQueryCount: 2, successfulGraphQueryCount: 1, failedGraphQueryCount: 1,
+    firstGraphQueryEvent: 12, firstGraphQueryMs: 130,
+  });
+  assert.deepEqual(parsed.behavioralTelemetry, {
+    modelTurns: 0, toolCalls: 8, sourceFileReads: 2, artifactReads: 3, graphQueries: 2,
+    searches: 0, edits: 0, shellCommands: 0, failedToolCalls: 2,
+  });
+
+  const failedOnly = parsePiEvents([
+    raw[4], raw[5], raw[12], raw[13],
+  ].map((event) => JSON.stringify(event)).join("\n"));
+  assert.equal(failedOnly.accessTelemetry.accesses.length, 2);
+  assert.equal(failedOnly.accessTelemetry.accesses.every((access) => !access.success), true);
+  assert.equal(failedOnly.accessTelemetry.artifactReadCount, 0);
+  assert.equal(failedOnly.accessTelemetry.artifactUsed, false);
+  assert.equal(failedOnly.accessTelemetry.failedAccesses.length, 2);
+  assert.equal(failedOnly.accessTelemetry.firstArtifactAccessEvent, 0);
+  assert.equal(failedOnly.accessTelemetry.graphQueryCount, 1);
+  assert.equal(failedOnly.accessTelemetry.successfulGraphQueryCount, 0);
+  assert.equal(failedOnly.accessTelemetry.firstGraphQueryEvent, 2);
+
+  const duplicates = parsePiEvents([
+    { type: "tool_execution_start", toolCallId: "same", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_start", toolCallId: "same", toolName: "read", args: { path: "src/main.ts" } },
+    { type: "tool_execution_end", toolCallId: "same", toolName: "read", result: {}, isError: false },
+    { type: "tool_execution_end", toolCallId: "same", toolName: "read", result: {}, isError: false },
+  ].map((event) => JSON.stringify(event)).join("\n"));
+  assert.equal(duplicates.behavioralTelemetry.toolCalls, 1);
+  assert.equal(duplicates.behavioralTelemetry.sourceFileReads, 1);
+  assert.equal(duplicates.accessTelemetry.accesses.length, 1);
+  assert.deepEqual(duplicates.accessTelemetry.openedFiles, ["src/main.ts"]);
+
+  const graphOnly = parsePiEvents([
+    { type: "tool_execution_start", toolCallId: "graph", toolName: "mapbench_query", args: { operation: "find" } },
+    { type: "tool_execution_end", toolCallId: "graph", toolName: "mapbench_query", result: {}, isError: false },
+  ].map((event) => JSON.stringify(event)).join("\n"));
+  assert.equal(graphOnly.accessTelemetry.artifactUsed, true);
+});
+
 test("Pi JSONL parsing records exact wall time to the first source-code edit", () => {
   const input = [
     { type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "src/main.ts" } },
@@ -498,7 +646,7 @@ test("pricing rejects malformed provider data instead of reporting a fake zero c
   assert.equal(openRouterModelId("claude-opus-4"), "anthropic/claude-opus-4");
   assert.throws(() => openRouterModelId("private-deployment"), /Cannot infer/);
 });
-test("MapBench Pi commands gate write tools on the isolated coding mode", () => {
+test("MapBench Pi commands disable ambient context and expose only condition interfaces", () => {
   const command = piCommand("openai-codex", "gpt-5.6-terra", "outline-only", "prompt");
   assert.equal(command[command.indexOf("--model") + 1], "gpt-5.6-terra");
   assert.equal(command[command.indexOf("--provider") + 1], "openai-codex");
@@ -509,8 +657,8 @@ test("MapBench Pi commands gate write tools on the isolated coding mode", () => 
   assert.equal(command[command.indexOf("--tools") + 1], "read,grep,find,ls");
   assert.equal(command.includes("bash"), false);
   assert.equal(command.includes("mapbench_query"), false);
-  assert.match(command[command.indexOf("--append-system-prompt") + 1], /architecture\.md/);
-  assert.doesNotMatch(command[command.indexOf("--append-system-prompt") + 1], /mapbench_query/);
+  assert.equal(command[command.indexOf("--append-system-prompt") + 1], conditionInstructions("outline-only"));
+  assert.doesNotMatch(command.join(" "), /AGENTS\.md|CLAUDE\.md/);
 
   const callgraph = piCommand("openai-codex", "gpt-5.6-terra", "callgraph-only", "prompt");
   assert.equal(callgraph[callgraph.indexOf("--tools") + 1], "read,grep,find,ls,mapbench_query");
@@ -522,7 +670,7 @@ test("MapBench Pi commands gate write tools on the isolated coding mode", () => 
 
   const architectureCoding = piCommand("openai-codex", "gpt-5.6-terra", "outline-only", "prompt", "isolated-read-write");
   assert.equal(architectureCoding[architectureCoding.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash");
-  assert.match(architectureCoding[architectureCoding.indexOf("--append-system-prompt") + 1], /architecture\.md|complete real repository source/);
+  assert.equal(architectureCoding[architectureCoding.indexOf("--append-system-prompt") + 1], conditionInstructions("outline-only"));
   assert.doesNotMatch(architectureCoding[architectureCoding.indexOf("--append-system-prompt") + 1], /mapbench_query|skeleton/);
 
   const readOnlyEnvironment = isolatedPiEnvironment("/tmp/pi-home", null);
@@ -771,8 +919,56 @@ process.exitCode = passed ? 0 : 1;
     assert.equal(completed.runs[0].status, "completed");
     assert.equal(completed.runs[0].hiddenGrader.passed, true);
     assert.equal(completed.runs[0].tokens.total, 15);
+    assert.deepEqual(completed.runs[0].telemetry, {
+      passed: true,
+      verifierScore: { raw: 1, max: 1, normalized: 1 },
+      modelTurns: 1,
+      toolCalls: 1,
+      sourceFileReads: 1,
+      artifactReads: 0,
+      graphQueries: 0,
+      searches: 0,
+      edits: 0,
+      shellCommands: 0,
+      failedToolCalls: 0,
+      accesses: [{
+        path: "src/main.ts", kind: "source", tool: "read", eventIndex: 0,
+        elapsedMs: completed.runs[0].telemetry.accesses[0].elapsedMs, status: "succeeded", success: true,
+      }],
+      failedAccesses: [],
+      incompleteAccesses: [],
+      openedFiles: ["src/main.ts"],
+      uniqueSourceFilesOpened: 1,
+      uniqueArtifactFilesOpened: 0,
+      sourceFileReadCount: 1,
+      artifactReadCount: 0,
+      artifactUsed: false,
+      failedSourceFileReadCount: 0,
+      failedArtifactReadCount: 0,
+      firstArtifactAccessEvent: null,
+      firstArtifactAccessMs: null,
+      graphQueryCount: 0,
+      successfulGraphQueryCount: 0,
+      failedGraphQueryCount: 0,
+      firstGraphQueryEvent: null,
+      firstGraphQueryMs: null,
+      tokens: { input: 12, uncachedInput: 10, cachedInput: 2, output: 3, reasoning: 0, total: 15 },
+      runtimeMs: completed.runs[0].durationMs,
+      provenance: { schemaVersion: 1, behavioralSource: "pi-jsonl-tool-events", tokenSource: "pi-jsonl-message-usage", verifierSource: "hidden-grader", rawEventFile: "events.jsonl" },
+    });
+    assert.deepEqual(completed.runs[0].trial, {
+      taskId: "behavior", condition: "regular-code", repetition: 1, model: "fixed-test-model", provider: "openai-codex",
+      backend: "docker", harness: "pi", repoCommit: completed.runs[0].targetCommit,
+      configurationSha256: completed.runs[0].trial.configurationSha256, promptSha256: completed.runs[0].promptSha256,
+      discoveryInstructionsSha256: completed.runs[0].discoveryInstructionsSha256,
+    });
+    assert.match(completed.runs[0].trial.configurationSha256, /^[0-9a-f]{64}$/);
+    assert.equal(completed.runs[0].discoveryInstructions, conditionInstructions("regular-code"));
+    assert.equal(completed.runs[0].discoveryInstructionsSha256,
+      createHash("sha256").update(conditionInstructions("regular-code")).digest("hex"));
     assert.equal(new Set(completed.runs.map((run) => run.baselineTreeHash)).size, 1);
     assert.equal(new Set(completed.runs.map((run) => run.promptSha256)).size, 1);
+    assert.equal(new Set(completed.runs.map((run) => run.trial.configurationSha256)).size, 1);
     for (const run of completed.runs) {
       assert.equal(run.isolation.freshProcess, true);
       assert.equal(run.isolation.resumedSession, false);
@@ -789,11 +985,30 @@ process.exitCode = passed ? 0 : 1;
       }
       const usage = JSON.parse(await fs.readFile(path.join(runDirectory, "usage-events.json"), "utf8"));
       assert.equal(usage[0].event.type, "message_end");
+      const persisted = JSON.parse(await fs.readFile(path.join(runDirectory, "result.json"), "utf8"));
+      assert.equal(persisted.telemetry.sourceFileReads, 1);
+      assert.equal(persisted.telemetry.sourceFileReadCount, 1);
+      assert.deepEqual(persisted.telemetry.openedFiles, ["src/main.ts"]);
+      assert.equal(persisted.discoveryInstructions, conditionInstructions("regular-code"));
+      assert.equal(persisted.trial.discoveryInstructionsSha256, persisted.discoveryInstructionsSha256);
+      assert.equal(persisted.trial.repetition, run.run);
     }
     const config = JSON.parse(await fs.readFile(path.join(completed.resultsRoot, "config.json"), "utf8"));
     assert.equal(config.tasksRoot, tasksRoot);
     assert.equal(config.graderPreflight.behavior.details.passed, false);
+    assert.equal(config.discoveryInstructions["regular-code"].text, conditionInstructions("regular-code"));
+    assert.equal(config.discoveryInstructions["regular-code"].sha256, completed.runs[0].discoveryInstructionsSha256);
     assert.equal(await fs.access(path.join(completed.resultsRoot, "report.html")).then(() => true, () => false), true);
+    for (const name of ["trials.csv", "conditions.csv"]) {
+      assert.equal(await fs.access(path.join(completed.resultsRoot, name)).then(() => true, () => false), true, name);
+    }
+    const summary = JSON.parse(await fs.readFile(path.join(completed.resultsRoot, "summary.json"), "utf8"));
+    assert.equal(summary.schemaVersion, 3);
+    assert.equal(summary.conditions[0].telemetry.mean.sourceFileReads, 1);
+    assert.equal(summary.conditions[0].telemetry.median.toolCalls, 1);
+    const trialsCsv = await fs.readFile(path.join(completed.resultsRoot, "trials.csv"), "utf8");
+    assert.match(trialsCsv, /taskId,condition,repetition,model,provider,backend,harness,repoCommit,configurationSha256,promptSha256,discoveryInstructionsSha256/);
+    assert.match(trialsCsv, /openedFiles,sourceFileReadCount,artifactReadCount,uniqueSourceFilesOpened,uniqueArtifactFilesOpened,artifactUsed/);
     const smoke = await runBenchmark({
       repo, taskIds: ["behavior"], runs: 1, smoke: true, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model", timeoutMs: 5_000,
       dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "smoke-results"), tasksRoot,
@@ -804,6 +1019,105 @@ process.exitCode = passed ? 0 : 1;
     assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "config.json"), "utf8")).smoke, true);
     assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "summary.json"), "utf8")).smoke, true);
     assert.equal(JSON.parse(await fs.readFile(path.join(smoke.resultsRoot, "regular-code", "behavior", "run-001", "result.json"), "utf8")).smoke, true);
+  } finally {
+    if (previousPi === undefined) delete process.env.MAPBENCH_PI;
+    else process.env.MAPBENCH_PI = previousPi;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("timed-out trials persist telemetry collected before the process was terminated", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-timeout-telemetry-"));
+  const previousPi = process.env.MAPBENCH_PI;
+  try {
+    const { repo } = await makeGitRepository(root);
+    const tasksRoot = path.join(root, "tasks");
+    const task = path.join(tasksRoot, "timeout-task");
+    await fs.mkdir(path.join(task, "grader"), { recursive: true });
+    const fakePi = path.join(root, "fake-pi.mjs");
+    await fs.writeFile(fakePi, `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "tool_execution_start", toolCallId: "unfinished-read", toolName: "read", args: { path: "src/main.ts" } }));
+console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [], usage: { input: 2, cacheRead: 0, cacheWrite: 0, output: 1, totalTokens: 3 } } }));
+setInterval(() => {}, 1000);
+`, "utf8");
+    await fs.chmod(fakePi, 0o755);
+    await fs.writeFile(path.join(task, "prompt.md"), "Inspect the source.\n");
+    await fs.writeFile(path.join(task, "task.json"), JSON.stringify({
+      version: 1, id: "timeout-task", title: "Timeout", promptFile: "prompt.md",
+      grader: { command: [process.execPath, "{grader}/grade.js"] },
+    }));
+    await fs.writeFile(path.join(task, "grader", "grade.js"),
+      'console.log(JSON.stringify({score:0,maxScore:1,passed:false})); process.exitCode=1;\n');
+    process.env.MAPBENCH_PI = fakePi;
+    const completed = await runBenchmark({
+      repo, taskIds: ["timeout-task"], runs: 3, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model",
+      timeoutMs: 300, dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "results"), tasksRoot,
+      pricingMode: "off", seed: "timeout-test", debugUsage: false,
+    });
+    for (const run of completed.runs) {
+      assert.equal(run.status, "timeout");
+      assert.equal(run.telemetry.modelTurns, 1);
+      assert.equal(run.telemetry.toolCalls, 1);
+      assert.equal(run.telemetry.sourceFileReads, 1);
+      assert.equal(run.telemetry.sourceFileReadCount, 0);
+      assert.deepEqual(run.telemetry.openedFiles, []);
+      assert.equal(run.telemetry.accesses.length, 1);
+      assert.deepEqual({ ...run.telemetry.accesses[0], elapsedMs: null }, {
+        path: "src/main.ts", kind: "source", tool: "read", eventIndex: 0, elapsedMs: null, status: "incomplete", success: false,
+      });
+      assert.deepEqual(run.telemetry.failedAccesses, []);
+      assert.equal(run.telemetry.incompleteAccesses.length, 1);
+      assert.equal(run.telemetry.failedToolCalls, 0);
+      assert.equal(run.telemetry.tokens.total, 3);
+      const directory = path.join(completed.resultsRoot, run.artifactDirectory);
+      assert.match(await fs.readFile(path.join(directory, "events.jsonl"), "utf8"), /unfinished-read/);
+      const persisted = JSON.parse(await fs.readFile(path.join(directory, "result.json"), "utf8"));
+      assert.equal(persisted.telemetry.toolCalls, 1);
+      assert.equal(persisted.telemetry.accesses[0].success, false);
+    }
+  } finally {
+    if (previousPi === undefined) delete process.env.MAPBENCH_PI;
+    else process.env.MAPBENCH_PI = previousPi;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed trials persist successful access telemetry from raw events", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "benchmark-failed-telemetry-"));
+  const previousPi = process.env.MAPBENCH_PI;
+  try {
+    const { repo } = await makeGitRepository(root);
+    const tasksRoot = path.join(root, "tasks");
+    const task = path.join(tasksRoot, "failed-task");
+    await fs.mkdir(path.join(task, "grader"), { recursive: true });
+    const fakePi = path.join(root, "fake-pi.mjs");
+    await fs.writeFile(fakePi, `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "src/main.ts" } }));
+console.log(JSON.stringify({ type: "tool_execution_end", toolCallId: "read", toolName: "read", result: {}, isError: false }));
+process.exitCode = 1;
+`, "utf8");
+    await fs.chmod(fakePi, 0o755);
+    await fs.writeFile(path.join(task, "prompt.md"), "Inspect the source.\n");
+    await fs.writeFile(path.join(task, "task.json"), JSON.stringify({
+      version: 1, id: "failed-task", title: "Failure", promptFile: "prompt.md",
+      grader: { command: [process.execPath, "{grader}/grade.js"] },
+    }));
+    await fs.writeFile(path.join(task, "grader", "grade.js"),
+      'console.log(JSON.stringify({score:0,maxScore:1,passed:false})); process.exitCode=1;\n');
+    process.env.MAPBENCH_PI = fakePi;
+    const completed = await runBenchmark({
+      repo, taskIds: ["failed-task"], runs: 3, conditions: ["regular-code"], provider: "openai-codex", model: "fixed-test-model",
+      timeoutMs: 5_000, dryRun: false, keepWorkspaces: false, outputRoot: path.join(root, "results"), tasksRoot,
+      pricingMode: "off", seed: "failed-test", debugUsage: false,
+    });
+    for (const run of completed.runs) {
+      assert.equal(run.status, "failed");
+      assert.equal(run.telemetry.sourceFileReadCount, 1);
+      assert.equal(run.telemetry.accesses[0].success, true);
+      const persisted = JSON.parse(await fs.readFile(path.join(completed.resultsRoot, run.artifactDirectory, "result.json"), "utf8"));
+      assert.equal(persisted.telemetry.sourceFileReadCount, 1);
+      assert.deepEqual(persisted.telemetry.openedFiles, ["src/main.ts"]);
+    }
   } finally {
     if (previousPi === undefined) delete process.env.MAPBENCH_PI;
     else process.env.MAPBENCH_PI = previousPi;

@@ -6,6 +6,7 @@ import { runHiddenGrader } from "./grader.js";
 import { runProcess } from "./process.js";
 import { generateReport } from "./report.js";
 import { buildSummary } from "./summary.js";
+import { withVerifierTelemetry } from "./telemetry.js";
 import { loadTask, resolveBundledTasksRoot } from "./task-loader.js";
 import type { BenchmarkSummary, RunResult } from "./types.js";
 import { writeJson } from "./util.js";
@@ -31,7 +32,7 @@ async function main(): Promise<void> {
   const config = JSON.parse(await fs.readFile(path.join(resultsRoot, "config.json"), "utf8")) as {
     repo?: unknown; targetCommit?: unknown; tasksRoot?: unknown;
   };
-  if (prior.schemaVersion !== 2 || !Array.isArray(prior.runs)) throw new Error("Unsupported summary.json schema.");
+  if (prior.schemaVersion !== 3 || !Array.isArray(prior.runs)) throw new Error("Unsupported summary.json schema.");
   if (typeof config.repo !== "string" || typeof config.targetCommit !== "string") throw new Error("config.json lacks repository provenance.");
 
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "cartograph-regrade-"));
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
       const answer = path.join(artifactDirectory, "final-message.md");
       const events = path.join(artifactDirectory, "events.jsonl");
       const hiddenGrader = await runHiddenGrader(task, workspace, answer, events);
-      const run = { ...original, hiddenGrader };
+      const run = { ...original, hiddenGrader, telemetry: withVerifierTelemetry(original.telemetry, hiddenGrader) };
       runs.push(run);
       await Promise.all([
         writeJson(path.join(artifactDirectory, "grader.json"), hiddenGrader),

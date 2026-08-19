@@ -224,6 +224,8 @@ config.json          immutable commit, task, condition, model, isolation, and pr
 summary.json         machine-readable aggregate and all run records
 summary.md           concise text summary
 report.html          self-contained report
+trials.csv           one flattened row per trial, including identity and telemetry
+conditions.csv       per-condition mean and median telemetry rows
 graphics/figure-1-main-performance.svg
 graphics/figure-2-task-condition-heatmap.svg
 graphics/figure-3a-mean-total-tokens.svg
@@ -245,7 +247,13 @@ graphics/figure-6-median-token-breakdown.svg
     verifier/test-stdout.txt  captured verifier output
 ```
 
-Failed and timed-out runs remain in the sample. Every aggregate uses the arithmetic mean of the three raw repetitions. Pair IDs support condition wins/losses/ties without discarding unmatched failures.
+Failed and timed-out runs remain in the sample. Primary tables retain arithmetic means of the three raw repetitions; the telemetry table and CSV additionally provide medians. Pair IDs support condition wins/losses/ties without discarding unmatched failures.
+
+Each `result.json` includes a `trial` identity block (`taskId`, condition, repetition, model, provider, backend, Pi harness, repository commit, and SHA-256 hashes of the trial configuration and prompt) plus a `telemetry` block. Correctness is recorded as verifier `passed` and raw/max/normalized score. Efficiency fields include model turns, tool calls, repository source reads, generated `.mapbench/` artifact reads, call-graph queries, searches, edits, shell commands, failed tool calls, authoritative token fields, and agent runtime. `summary.json` retains all trial rows and reports both the mean and median of every telemetry field per condition.
+
+Behavioral telemetry is recomputed from Pi JSONL events, never from the model response. A unique tool-call ID counts once regardless of output size, duplicate starts, or duplicate end events; a start event that has no matching end event at timeout is still an invocation. Failed-tool counts require an `isError=true` end event. Direct source reads and shell read operations count as source reads only for source-code paths outside `.mapbench/`; generated artifact reads are counted separately. Grep/find/search operations, `mapbench_query`, edit/write operations, and bash/shell invocations use the shared definitions in `benchmark/telemetry.ts`. Every trial retains the original `events.jsonl`, including failed and timed-out runs, so these rules can be revised and the counters recomputed later.
+
+Artifact-adoption telemetry retains every file or graph access attempt in chronological order. `openedFiles`, unique-file counts, and the read counts represent successful file opens; `artifactUsed` becomes true after either a generated `.mapbench/` file or the call graph is accessed successfully. First artifact and graph access timing is measured at the first attempt, even when that attempt fails. Failed accesses and incomplete accesses are persisted as separate ordered records rather than being mixed into successful opens.
 
 ### Publication figures
 

@@ -27,13 +27,14 @@ for (const condition of Object.keys(COMPONENTS) as Condition[]) {
 
 export function conditionInstructions(condition: Condition): string {
   const components = COMPONENTS[condition];
-  const lines = ["Work from the complete real repository source, which remains available for inspection."];
-  if (components.architecture) lines.push("- Read `.mapbench/architecture.md` for the deterministic hierarchical architecture view.");
-  if (components.skeleton) lines.push("- Read `.mapbench/skeleton/` for language-native declarations, signatures, and structural relationship comments without implementation bodies.");
-  if (components.callgraph) lines.push("- Use the `mapbench_query` tool for deterministic source-anchored call-graph queries.");
-  if (!components.architecture && !components.skeleton && !components.callgraph) lines.push("No additional generated repository reference is provided.");
-  lines.push("Verify conclusions in the real source when implementation behavior matters.");
-  return lines.join("\n");
+  const lines: string[] = [];
+  if (components.architecture) lines.push("- Architecture: `.mapbench/architecture.md` is available.");
+  if (components.skeleton) lines.push("- Skeleton: `.mapbench/skeleton/` is available.");
+  if (components.callgraph) lines.push("- Call graph: `mapbench_query` is available.");
+  const closing = "Use the available repository information as you judge useful for completing the task.";
+  return lines.length
+    ? `The following generated repository-structure aids are available:\n${lines.join("\n")}\n\n${closing}`
+    : closing;
 }
 
 async function copySkeletons(source: string, destination: string): Promise<void> {

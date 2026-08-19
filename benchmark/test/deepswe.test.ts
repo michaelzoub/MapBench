@@ -303,6 +303,13 @@ test("DeepSWE tasks pass through the runner and capture isolated verifier result
       assert.equal(fixture.targetCommit.startsWith(run.targetCommit), true);
       assert.equal(run.hiddenGrader.passed, true);
       assert.equal(run.hiddenGrader.score, 1);
+      assert.equal(run.telemetry.passed, true);
+      assert.deepEqual(run.telemetry.verifierScore, { raw: 1, max: 1, normalized: 1 });
+      assert.equal(run.trial.backend, "docker");
+      assert.equal(run.trial.harness, "pi");
+      assert.equal(run.trial.repoCommit, run.targetCommit);
+      assert.equal(run.trial.repetition, run.run);
+      assert.match(run.trial.configurationSha256, /^[0-9a-f]{64}$/);
       assert.equal(verifierReward(run.hiddenGrader.details), 1);
       assert.equal(run.isolation.tools, "workspace-read-write-docker-isolated");
       assert.equal(run.isolation.resources, "task-environment-limits");
@@ -312,6 +319,7 @@ test("DeepSWE tasks pass through the runner and capture isolated verifier result
       assert.doesNotMatch(patch, /REFERENCE_SOLUTION_SECRET/);
       assert.equal(await fs.stat(path.join(directory, "deepswe", "verifier", "reward.json")).then((value) => value.isFile()), true);
       assert.equal(await fs.stat(path.join(directory, "deepswe", "verifier", "ctrf.json")).then((value) => value.isFile()), true);
+      assert.equal(JSON.parse(await fs.readFile(path.join(directory, "result.json"), "utf8")).telemetry.passed, true);
     }
     assert.deepEqual([...new Set(completed.runs.map((run) => run.condition))].sort(), ["outline-only", "regular-code"]);
     assert.equal(completed.plan[0].repository.startsWith("https://github.com/example/"), true);
@@ -321,6 +329,10 @@ test("DeepSWE tasks pass through the runner and capture isolated verifier result
     assert.equal(config.deepSwe.revision, fixture.source.revision);
     assert.equal(config.graderPreflight[fixture.ids[0]].passed, false);
     assert.equal(config.graderPreflight[fixture.ids[0]].details.reward.reward, 0);
+    assert.equal(config.telemetry.definitions.toolCalls, "unique Pi tool invocations observed at start or end");
+    const summary = JSON.parse(await fs.readFile(path.join(completed.resultsRoot, "summary.json"), "utf8"));
+    assert.equal(summary.conditions[0].telemetry.mean.passed, 1);
+    assert.equal(summary.conditions[0].telemetry.median.verifierScore.normalized, 1);
   } finally {
     if (previous.docker === undefined) delete process.env.MAPBENCH_DOCKER; else process.env.MAPBENCH_DOCKER = previous.docker;
     if (previous.pi === undefined) delete process.env.MAPBENCH_PI; else process.env.MAPBENCH_PI = previous.pi;

@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   if (!input) throw new Error("Missing value for --results.");
   const root = path.resolve(input);
   const summary = JSON.parse(await fs.readFile(path.join(root, "summary.json"), "utf8")) as BenchmarkSummary;
-  if (summary.schemaVersion !== 2 || !Array.isArray(summary.runs)) throw new Error("Unsupported summary.json schema.");
+  if (summary.schemaVersion !== 3 || !Array.isArray(summary.runs)) throw new Error("Unsupported summary.json schema.");
   const normalized = buildSummary(summary.runs, summary.generatedAt);
   await generateReport(root, normalized);
   process.stdout.write(`Report regenerated: ${root}\n`);

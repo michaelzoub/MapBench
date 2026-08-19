@@ -154,6 +154,103 @@ export interface TokenUsage extends TokenCounts {
   provenance: TokenProvenance;
 }
 
+export interface VerifierScoreTelemetry {
+  raw: number;
+  max: number;
+  normalized: number | null;
+}
+
+/** Counters derived exclusively from Pi JSONL events. */
+export interface BehavioralTelemetry {
+  modelTurns: number;
+  toolCalls: number;
+  sourceFileReads: number;
+  artifactReads: number;
+  graphQueries: number;
+  searches: number;
+  edits: number;
+  shellCommands: number;
+  failedToolCalls: number;
+}
+
+export type AccessKind = "source" | "artifact" | "other";
+export type AccessStatus = "succeeded" | "failed" | "incomplete";
+
+/** A chronological file read or generated-graph query derived from Pi JSONL. */
+export interface AccessRecord {
+  path: string;
+  kind: AccessKind;
+  tool: string;
+  eventIndex: number;
+  elapsedMs: number | null;
+  status: AccessStatus;
+  success: boolean;
+}
+
+export interface AccessTelemetry {
+  accesses: AccessRecord[];
+  /** Accesses completed with isError=true, in attempt order. */
+  failedAccesses: AccessRecord[];
+  /** Accesses with no matching end event, normally because the trial timed out. */
+  incompleteAccesses: AccessRecord[];
+  /** Successfully opened files, in access order and including repeated reads. */
+  openedFiles: string[];
+  uniqueSourceFilesOpened: number;
+  uniqueArtifactFilesOpened: number;
+  sourceFileReadCount: number;
+  artifactReadCount: number;
+  artifactUsed: boolean;
+  failedSourceFileReadCount: number;
+  failedArtifactReadCount: number;
+  firstArtifactAccessEvent: number | null;
+  firstArtifactAccessMs: number | null;
+  graphQueryCount: number;
+  successfulGraphQueryCount: number;
+  failedGraphQueryCount: number;
+  firstGraphQueryEvent: number | null;
+  firstGraphQueryMs: number | null;
+}
+
+export interface TrialTelemetry extends BehavioralTelemetry, AccessTelemetry {
+  passed: boolean;
+  verifierScore: VerifierScoreTelemetry;
+  tokens: TokenCounts;
+  runtimeMs: number;
+  provenance: {
+    schemaVersion: 1;
+    behavioralSource: "pi-jsonl-tool-events";
+    tokenSource: "pi-jsonl-message-usage";
+    verifierSource: "hidden-grader";
+    rawEventFile: "events.jsonl";
+  };
+}
+
+export interface TrialIdentity {
+  taskId: string;
+  condition: Condition;
+  repetition: number;
+  model: string;
+  provider: string;
+  backend: ExecutionBackendKind;
+  harness: "pi";
+  repoCommit: string;
+  configurationSha256: string;
+  promptSha256: string;
+  discoveryInstructionsSha256?: string;
+}
+
+export interface TelemetryAggregate extends BehavioralTelemetry {
+  passed: number;
+  verifierScore: VerifierScoreTelemetry;
+  tokens: TokenCounts;
+  runtimeMs: number;
+}
+
+export interface TelemetryStatistics {
+  mean: TelemetryAggregate;
+  median: TelemetryAggregate;
+}
+
 export interface CommandRecord {
   command: string;
   status: string;
@@ -247,7 +344,7 @@ export interface ExecutionBackendMetadata {
 
 
 export interface RunResult {
-  schemaVersion: 2 | 3;
+  schemaVersion: 4;
   smoke?: boolean;
   pairId: string;
   taskId: string;
@@ -257,12 +354,16 @@ export interface RunResult {
   baselineCommit: string;
   baselineTreeHash: string;
   promptSha256: string;
+  discoveryInstructions?: string;
+  discoveryInstructionsSha256?: string;
   provider: string;
   model: string;
+  trial: TrialIdentity;
   status: "completed" | "failed" | "timeout";
   exitCode: number | null;
   durationMs: number;
   tokens: TokenUsage;
+  telemetry: TrialTelemetry;
   estimatedCostUsd: number | null;
   commands: CommandRecord[];
   commandCount: number;
@@ -352,12 +453,13 @@ export interface SummaryCondition {
   commandsMean: number;
   filesMean: number;
   navigationMean: NavigationMetrics;
+  telemetry: TelemetryStatistics;
   accuracyPer100kTokensMean: number | null;
   pairedVsRaw: { wins: number; losses: number; ties: number };
 }
 
 export interface BenchmarkSummary {
-  schemaVersion: 2;
+  schemaVersion: 3;
   generatedAt: string;
   smoke: boolean;
   tasks: string[];
@@ -374,4 +476,3 @@ export interface BenchmarkSummary {
   }>;
   runs: RunResult[];
 }
-

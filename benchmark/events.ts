@@ -1,5 +1,6 @@
 import type { CommandRecord, EditNavigationCost, Pricing, TokenUsage } from "./types.js";
 import { accessedPaths, navigationKind, readRanges } from "./navigation.js";
+import { deriveAccessTelemetry, deriveBehavioralTelemetry, type PiTraceEvent } from "./telemetry.js";
 
 const finiteNumber = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -68,6 +69,8 @@ function sourceEditPaths(toolName: string, args: unknown): string[] {
 export function parsePiEvents(contents: string, stdoutLineElapsedMs: number[] = []): {
   tokens: TokenUsage;
   usageEvents: RawUsageEvent[];
+  behavioralTelemetry: ReturnType<typeof deriveBehavioralTelemetry>;
+  accessTelemetry: ReturnType<typeof deriveAccessTelemetry>;
   commands: CommandRecord[];
   editNavigation: Omit<EditNavigationCost, "censoredAtMs">;
   finalResponse: string;
@@ -76,6 +79,7 @@ export function parsePiEvents(contents: string, stdoutLineElapsedMs: number[] = 
   const commands: CommandRecord[] = [];
   const errors: string[] = [];
   const usageEvents: RawUsageEvent[] = [];
+  const traceEvents: PiTraceEvent[] = [];
   const activeTools = new Map<string, { name: string; args: unknown; line: number }>();
   let firstSourceEditLine: number | null = null;
   let finalResponse = "";
@@ -85,6 +89,7 @@ export function parsePiEvents(contents: string, stdoutLineElapsedMs: number[] = 
     if (!line.trim()) continue;
     let event: Record<string, unknown>;
     try { event = JSON.parse(line) as Record<string, unknown>; } catch { errors.push(`Invalid JSONL: ${line.slice(0, 120)}`); continue; }
+    traceEvents.push({ line: index + 1, event });
     const type = String(event.type ?? "");
     if (type === "message_end" && event.message && typeof event.message === "object" && !Array.isArray(event.message)) {
       const message = event.message as Record<string, unknown>;
@@ -146,6 +151,8 @@ export function parsePiEvents(contents: string, stdoutLineElapsedMs: number[] = 
   return {
     tokens,
     usageEvents,
+    behavioralTelemetry: deriveBehavioralTelemetry(traceEvents),
+    accessTelemetry: deriveAccessTelemetry(traceEvents, stdoutLineElapsedMs),
     commands,
     finalResponse,
     editNavigation: {

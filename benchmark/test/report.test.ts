@@ -6,6 +6,7 @@ import test from "node:test";
 import { generateReport, renderGraphics } from "../report.js";
 import { buildSummary } from "../summary.js";
 import { emptyNavigationMetrics } from "../navigation.js";
+import { buildTrialTelemetry } from "../telemetry.js";
 import type { CheckResult, RunResult, TokenUsage } from "../types.js";
 
 const check: CheckResult = { status: "unavailable", command: null, exitCode: null, durationMs: 0, stdout: "", stderr: "" };
@@ -16,9 +17,12 @@ const tokens: TokenUsage = {
       reasoning: "message.usage.reasoning", total: "derived: total input + message.usage.output" } },
 };
 const run: RunResult = {
-  schemaVersion: 3, pairId: "task:run-001", taskId: "task", condition: "regular-code", run: 1, targetCommit: "a", baselineCommit: "b",
+  schemaVersion: 4, pairId: "task:run-001", taskId: "task", condition: "regular-code", run: 1, targetCommit: "a", baselineCommit: "b",
   baselineTreeHash: "treehash", promptSha256: "prompthash", provider: "openai-codex", model: "fixed",
+  trial: { taskId: "task", condition: "regular-code", repetition: 1, model: "fixed", provider: "openai-codex", backend: "docker", harness: "pi", repoCommit: "a", configurationSha256: "confighash", promptSha256: "prompthash" },
   status: "failed", exitCode: 1, durationMs: 1200, tokens,
+  telemetry: buildTrialTelemetry({ modelTurns: 1, toolCalls: 0, sourceFileReads: 0, artifactReads: 0, graphQueries: 0, searches: 0, edits: 0, shellCommands: 0, failedToolCalls: 0 }, tokens,
+    { ...check, status: "failed", score: 0, maxScore: 1, passed: false, details: null }, 1200),
   estimatedCostUsd: null, commands: [], commandCount: 0, failedCommandCount: 0, finalResponse: "", filesChanged: [], fileCount: 0,
   navigation: emptyNavigationMetrics(),
   editNavigation: { firstSourceEditObserved: false, elapsedMs: null, censoredAtMs: 1200, eventLine: null },
@@ -52,7 +56,7 @@ test("report generation is deterministic, self-contained, and emits every requir
     await generateReport(first, summary);
     await generateReport(second, summary);
     assert.equal(await fs.access(path.join(first, "graphics", "commands-executed.svg")).then(() => true, () => false), false);
-    for (const file of ["summary.md", "report.html", ...Object.keys(graphics).map((name) => `graphics/${name}`)]) {
+    for (const file of ["summary.md", "report.html", "trials.csv", "conditions.csv", ...Object.keys(graphics).map((name) => `graphics/${name}`)]) {
       assert.equal(await fs.readFile(path.join(first, file), "utf8"), await fs.readFile(path.join(second, file), "utf8"), file);
     }
     const html = await fs.readFile(path.join(first, "report.html"), "utf8");
@@ -62,6 +66,8 @@ test("report generation is deterministic, self-contained, and emits every requir
     assert.match(html, /nodeRecall=50\.0%/);
     assert.match(html, /Modeled cost/);
     assert.match(html, /not an observed bill/);
+    assert.match(html, /Telemetry by condition \(mean \/ median\)/);
+    assert.match(html, /Efficiency telemetry is descriptive and does not adjust correctness/);
     assert.doesNotMatch(html, /<script[^>]+src=|<link[^>]+href=/);
     const markdown = await fs.readFile(path.join(first, "summary.md"), "utf8");
     assert.match(markdown, /graphics\/figure-1-main-performance\.svg/);
@@ -69,6 +75,15 @@ test("report generation is deterministic, self-contained, and emits every requir
     assert.match(markdown, /graphics\/figure-5-per-task-treatment-effect\.svg/);
     assert.match(markdown, /## Task-by-task arithmetic means/);
     assert.match(markdown, /sourceLinesRetrieved=12/);
+    assert.match(markdown, /## Telemetry by condition \(mean \/ median\)/);
+    const trialCsv = await fs.readFile(path.join(first, "trials.csv"), "utf8");
+    assert.match(trialCsv, /configurationSha256/);
+    assert.match(trialCsv, /sourceFileReads,artifactReads,graphQueries,searches,edits,shellCommands,failedToolCalls/);
+    assert.match(trialCsv, /openedFiles,sourceFileReadCount,artifactReadCount,uniqueSourceFilesOpened,uniqueArtifactFilesOpened,artifactUsed/);
+    assert.match(trialCsv, /failedSourceFileReadCount,failedArtifactReadCount,failedGraphQueryCount,failedAccesses,incompleteAccesses/);
+    const conditionCsv = await fs.readFile(path.join(first, "conditions.csv"), "utf8");
+    assert.match(conditionCsv, /regular-code,1,mean/);
+    assert.match(conditionCsv, /regular-code,1,median/);
     assert.match(graphics["figure-1-main-performance.svg"], /Pass rate by condition/);
     assert.doesNotMatch(graphics["figure-1-main-performance.svg"], /Wilson|confidence|whisker/i);
     assert.match(graphics["figure-2-task-condition-heatmap.svg"], /data-task="task"/);

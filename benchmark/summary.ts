@@ -2,6 +2,7 @@ import type { BenchmarkSummary, Condition, NavigationMetrics, RunResult, Summary
 import { CONDITION_FACTORS, CONDITION_LABELS, CONDITIONS, DEFAULT_CONDITIONS, normalizeCondition } from "./types.js";
 import { mean } from "./util.js";
 import { emptyNavigationMetrics } from "./navigation.js";
+import { telemetryStatistics, withVerifierTelemetry } from "./telemetry.js";
 
 function normalizedScore(run: RunResult): number {
   return run.hiddenGrader.maxScore > 0 ? run.hiddenGrader.score / run.hiddenGrader.maxScore : 0;
@@ -49,7 +50,21 @@ function navigationMeans(runs: RunResult[]): NavigationMetrics {
 export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOString()): BenchmarkSummary {
   runs = runs.map((run) => {
     const condition = normalizeCondition(run.condition);
-    return condition === run.condition ? run : { ...run, condition };
+    return {
+      ...run,
+      condition,
+      telemetry: withVerifierTelemetry(run.telemetry, run.hiddenGrader),
+      trial: {
+        ...run.trial,
+        taskId: run.taskId,
+        condition,
+        repetition: run.run,
+        model: run.model,
+        provider: run.provider,
+        repoCommit: run.targetCommit,
+        promptSha256: run.promptSha256,
+      },
+    };
   });
   const smoke = runs.length > 0 && runs.every((run) => run.smoke === true);
   const pairKey = (run: RunResult) => `${run.taskId}\0${run.pairId}`;
@@ -82,6 +97,7 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
       commandsMean: mean(samples.map((run) => run.commandCount)),
       filesMean: mean(samples.map((run) => run.fileCount)),
       navigationMean: navigationMeans(samples),
+      telemetry: telemetryStatistics(samples.map((run) => run.telemetry)),
       accuracyPer100kTokensMean: nullableMean(samples.map((run) =>
         run.tokens.total === null ? null : normalizedScore(run) * 100_000 / Math.max(1, run.tokens.total))),
       pairedVsRaw: outcomes,
@@ -118,7 +134,7 @@ export function buildSummary(runs: RunResult[], generatedAt = new Date().toISOSt
     ...(underReplicated ? [`Fewer than ${repetitionsRequired} repetition${repetitionsRequired === 1 ? "" : "s"} are available for at least one task-condition cell; means are incomplete.`] : []),
   ];
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt,
     smoke,
     tasks,

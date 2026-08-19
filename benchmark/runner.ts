@@ -11,11 +11,12 @@ import { runCheck, runHiddenGrader, unavailableCheck } from "./grader.js";
 import { generateReport } from "./report.js";
 import { runProcess } from "./process.js";
 import { buildSummary } from "./summary.js";
+import { buildTrialTelemetry, TELEMETRY_DEFINITIONS } from "./telemetry.js";
 import { expandCommand, loadTask } from "./task-loader.js";
 import { disabledPricing, fetchOpenRouterPricing } from "./pricing.js";
 import type { BenchmarkOptions, GraderResult, LoadedTask, PricingResolution, RunResult } from "./types.js";
 import { CONDITION_FACTORS, CONDITION_LABELS } from "./types.js";
-import { seededShuffle, slugTimestamp, writeJson } from "./util.js";
+import { seededShuffle, slugTimestamp, stableJson, writeJson } from "./util.js";
 import {
   assertGraderOutsideWorkspace,
   captureChanges,
@@ -42,6 +43,31 @@ export type PiWorkspaceMode = "read-only" | "isolated-read-write";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function trialConfigurationSha256(
+  options: BenchmarkOptions,
+  task: LoadedTask,
+  condition: BenchmarkOptions["conditions"][number],
+  backend: ExecutionBackend,
+): string {
+  const workspaceMode: PiWorkspaceMode = task.execution.kind === "repository-edit" ? "isolated-read-write" : "read-only";
+  const command = piCommand(options.provider, options.model, condition, "", workspaceMode);
+  return sha256(stableJson({
+    schemaVersion: 1,
+    provider: options.provider,
+    model: options.model,
+    thinking: DEFAULT_BENCHMARK_THINKING,
+    timeoutMs: options.timeoutMs,
+    condition,
+    conditionFactors: CONDITION_FACTORS[condition],
+    backend: backend.kind,
+    harness: "pi",
+    workspaceMode,
+    tools: command[command.indexOf("--tools") + 1],
+    systemInstructions: conditionInstructions(condition),
+    taskExecution: task.execution,
+  }));
 }
 
 export async function createIsolatedPiHome(parent: string, label: string): Promise<{ directory: string; initialFiles: string[] }> {
@@ -168,6 +194,10 @@ async function executeRun(
   let invocation = { exitCode: null as number | null, durationMs: 0, stdoutLineElapsedMs: [] as number[], timedOut: false, stderr: "" };
   let grader: GraderResult = { ...unavailableCheck(), score: 0, maxScore: 1, passed: false, details: null };
   let checks = { regression: unavailableCheck(), typecheck: unavailableCheck(), build: unavailableCheck() };
+  const promptSha256 = sha256(promptForTask(task));
+  const discoveryInstructions = conditionInstructions(condition);
+  const discoveryInstructionsSha256 = sha256(discoveryInstructions);
+  const configurationSha256 = trialConfigurationSha256(options, task, condition, backend);
   try {
     workspace = await createTaskWorkspace(options, task, commit, label, workspaceParent, backend);
     piHome = await createIsolatedPiHome(workspaceParent, label);
@@ -228,7 +258,7 @@ async function executeRun(
     ? (sandbox?.metadata ?? backend.metadata(task.execution))
     : undefined;
   const result: RunResult = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     smoke: options.smoke === true,
     pairId,
     taskId: task.id,
@@ -237,13 +267,29 @@ async function executeRun(
     targetCommit: commit,
     baselineCommit,
     baselineTreeHash,
-    promptSha256: sha256(promptForTask(task)),
+    promptSha256,
+    discoveryInstructions,
+    discoveryInstructionsSha256,
     provider: options.provider,
     model: options.model,
+    trial: {
+      taskId: task.id,
+      condition,
+      repetition: run,
+      model: options.model,
+      provider: options.provider,
+      backend: backend.kind,
+      harness: "pi",
+      repoCommit: commit,
+      configurationSha256,
+      promptSha256,
+      discoveryInstructionsSha256,
+    },
     status: invocation.timedOut ? "timeout" : invocation.exitCode === 0 && !error ? "completed" : "failed",
     exitCode: invocation.exitCode,
     durationMs: invocation.durationMs,
     tokens: parsed.tokens,
+    telemetry: buildTrialTelemetry(parsed.behavioralTelemetry, parsed.tokens, grader, invocation.durationMs, parsed.accessTelemetry),
     estimatedCostUsd: estimateCost(parsed.tokens, pricing.pricing ?? undefined),
     commands: parsed.commands,
     commandCount: parsed.commands.length,
@@ -467,7 +513,7 @@ export async function runBenchmark(
     });
     const graderPreflight: Record<string, GraderResult> = Object.fromEntries(preflightResults);
     await writeJson(path.join(resultsRoot, "config.json"), {
-      schemaVersion: 3,
+      schemaVersion: 4,
       createdAt: new Date().toISOString(),
       repo: repo || null,
       targetCommit: commit || null,
@@ -490,6 +536,10 @@ export async function runBenchmark(
       conditionFactors: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_FACTORS[condition]])),
       conditionLabels: Object.fromEntries(options.conditions.map((condition) => [condition, CONDITION_LABELS[condition]])),
       conditionComponents: Object.fromEntries(options.conditions.map((condition) => [condition, COMPONENTS[condition]])),
+      discoveryInstructions: Object.fromEntries(options.conditions.map((condition) => [condition, {
+        text: conditionInstructions(condition),
+        sha256: sha256(conditionInstructions(condition)),
+      }])),
       smoke: options.smoke === true,
       runs: options.runs,
       aggregation: "per-task paired arithmetic mean, then equal-weight task mean",
@@ -503,6 +553,12 @@ export async function runBenchmark(
       graderPreflight,
       workspaceRoot: options.keepWorkspaces ? workspaceParent : null,
       pricing,
+      telemetry: {
+        schemaVersion: 1,
+        definitions: TELEMETRY_DEFINITIONS,
+        rawEventFile: "events.jsonl",
+        aggregation: "per-condition arithmetic mean and median; failed and timed-out trials retained",
+      },
       pi: {
         jsonl: true,
         ephemeral: true,
